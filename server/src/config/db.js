@@ -266,15 +266,15 @@ function executeMemoryQuery(text, params = []) {
     return [{ count: rows.length }];
   }
 
-  // 2. SELECT * FROM users WHERE phone = $1
-  if (/select\s+\*\s+from\s+users\s+where\s+phone\s*=\s*\$1/i.test(sql)) {
+  // 2. SELECT ... FROM users WHERE phone = $1
+  if (/select\s+[\s\S]*?\s+from\s+users\s+where\s+phone\s*=\s*\$1/i.test(sql)) {
     const phone = String(params[0] || '').trim();
     const row = store.users.find(u => u.phone === phone);
     return row ? [row] : [];
   }
 
-  // 3. SELECT * FROM users WHERE id = $1
-  if (/select\s+\*\s+from\s+users\s+where\s+id\s*=\s*\$1/i.test(sql)) {
+  // 3. SELECT ... FROM users WHERE id = $1
+  if (/select\s+[\s\S]*?\s+from\s+users\s+where\s+id\s*=\s*\$1/i.test(sql)) {
     const id = Number(params[0]);
     const row = store.users.find(u => u.id === id);
     return row ? [row] : [];

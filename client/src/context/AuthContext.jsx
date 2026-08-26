@@ -3,9 +3,16 @@ import React, { createContext, useContext, useState, useEffect } from 'react';
 const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
-  const [user, setUser] = useState(null);
   const [token, setToken] = useState(localStorage.getItem('smart_dube_token') || null);
-  const [loading, setLoading] = useState(true);
+  const [user, setUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('smart_dube_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
+  const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     if (token) {
@@ -14,27 +21,31 @@ export const AuthProvider = ({ children }) => {
       })
         .then(res => res.json())
         .then(data => {
-          if (data.user) {
+          if (data && data.user) {
             setUser(data.user);
-          } else {
+            localStorage.setItem('smart_dube_user', JSON.stringify(data.user));
+          } else if (data && data.error && (data.error.includes('expired') || data.error.includes('denied'))) {
             logout();
           }
         })
-        .catch(() => logout())
-        .finally(() => setLoading(false));
-    } else {
-      setLoading(false);
+        .catch(err => {
+          console.warn('[Auth] Session check network note:', err.message);
+        });
     }
   }, [token]);
 
   const loginWithToken = (newToken, userData) => {
     localStorage.setItem('smart_dube_token', newToken);
+    if (userData) {
+      localStorage.setItem('smart_dube_user', JSON.stringify(userData));
+    }
     setToken(newToken);
     setUser(userData);
   };
 
   const logout = () => {
     localStorage.removeItem('smart_dube_token');
+    localStorage.removeItem('smart_dube_user');
     setToken(null);
     setUser(null);
   };
