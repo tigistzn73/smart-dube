@@ -1,0 +1,13 @@
+{
+  "name": "smart-dube",
+  "version": "1.0.0",
+  "description": "Smart Dube - Digital BNPL & Ledger System for Ethiopian Merchants",
+  "scripts": {
+    "install:all": "npm install --prefix client && npm install --prefix server",
+    "build": "npm install --prefix client && npm run build --prefix client && npm install --prefix server",
+    "start": "npm start --prefix server"
+  },
+  "keywords": ["bnpl", "ethiopia", "telebirr", "cbe-birr", "react", "express"],
+  "author": "Smart Dube",
+  "license": "ISC"
+}
