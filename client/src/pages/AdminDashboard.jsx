@@ -274,29 +274,19 @@ export const AdminDashboard = () => {
           </div>
         )}
 
-        {/* LEFT SIDEBAR NAVIGATION (DESKTOP & MINI-MOBILE) */}
-        <aside className={`${sidebarCollapsed ? 'w-[52px] md:w-[68px]' : 'w-[52px] md:w-60'} flex-shrink-0 glass-panel rounded-2xl p-1.5 md:p-3 flex flex-col justify-between border border-slate-800 sticky top-[52px] h-[calc(100vh-56px)] overflow-y-auto transition-all duration-300`}>
+        {/* LEFT SIDEBAR NAVIGATION (DESKTOP ONLY) */}
+        <aside className={`hidden md:flex ${sidebarCollapsed ? 'w-[68px]' : 'w-60'} flex-shrink-0 glass-panel rounded-2xl p-2 md:p-3 flex-col justify-between border border-slate-800 sticky top-[52px] h-[calc(100vh-56px)] overflow-y-auto transition-all duration-300`}>
           <div className="space-y-3 md:space-y-4 w-full">
             {/* Header Toggle */}
-            <div className={`flex items-center ${sidebarCollapsed ? 'justify-center' : 'justify-center md:justify-between'} pb-2 border-b border-slate-850`}>
+            <div className={`flex items-center ${sidebarCollapsed ? 'justify-center' : 'justify-between'} pb-2 border-b border-slate-850`}>
               <span className={`hidden ${sidebarCollapsed ? '' : 'md:inline'} text-[10px] font-bold text-slate-500 uppercase tracking-wider font-mono`}>Nav</span>
-              {/* Desktop toggle */}
               <button
                 type="button"
                 onClick={() => setSidebarCollapsed(!sidebarCollapsed)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-all cursor-pointer hidden md:block"
+                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800 transition-all cursor-pointer"
                 title={sidebarCollapsed ? 'Open sidebar' : 'Close sidebar'}
               >
                 {sidebarCollapsed ? <PanelLeftOpen className="w-4 h-4" /> : <PanelLeftClose className="w-4 h-4" />}
-              </button>
-              {/* Mobile toggle button on phone */}
-              <button
-                type="button"
-                onClick={() => window.dispatchEvent(new CustomEvent('open-mobile-drawer'))}
-                className="p-2 rounded-xl bg-purple-500/10 hover:bg-purple-500/20 text-purple-400 border border-purple-500/30 transition-all cursor-pointer md:hidden flex items-center justify-center shadow-md active:scale-95"
-                title="Open Menu Navigation"
-              >
-                <Menu className="w-4 h-4 text-purple-400" />
               </button>
             </div>
 
