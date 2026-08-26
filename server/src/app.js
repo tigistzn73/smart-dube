@@ -15,20 +15,33 @@ app.use(express.urlencoded({ limit: '10mb', extended: true }));
 
 // Auto-seed demo database if empty (async check)
 const db = require('./config/database');
-db.get('SELECT COUNT(*) as count FROM users').then(async (row) => {
-  if (!row || parseInt(row.count) === 0) {
-    console.log('[DB] Empty database detected — running auto-seed...');
-    try {
+async function initDb() {
+  try {
+    const row = await db.get('SELECT COUNT(*) as count FROM users');
+    if (!row || parseInt(row.count) === 0) {
+      console.log('[DB] Empty database detected — running auto-seed...');
       await seedDatabase();
-    } catch (e) {
-      console.error('[DB] Auto-seed failed:', e.message);
+    } else {
+      console.log(`[DB] Database ready — ${row.count} users found.`);
     }
-  } else {
-    console.log(`[DB] Database ready — ${row.count} users found.`);
+  } catch (err) {
+    console.log('[DB] Initializing schema and seed...');
+    try {
+      if (db.pool) {
+        const schemaPath = path.join(__dirname, 'db/schema.sql');
+        if (fs.existsSync(schemaPath)) {
+          const sql = fs.readFileSync(schemaPath, 'utf8');
+          await db.pool.query(sql);
+        }
+      }
+      await seedDatabase();
+      console.log('[DB] Initial migration and seed completed successfully!');
+    } catch (seedErr) {
+      console.error('[DB] Migration/Seed error:', seedErr.message);
+    }
   }
-}).catch(err => {
-  console.error('[DB] Auto-seed check error:', err.message);
-});
+}
+initDb();
 
 // Health check endpoint
 app.get('/api/health', (req, res) => {
