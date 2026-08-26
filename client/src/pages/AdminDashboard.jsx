@@ -199,7 +199,7 @@ export const AdminDashboard = () => {
 
   return (
     <div className="flex-1 min-h-0 flex flex-col">
-      <div className="flex flex-row gap-2 md:gap-4 items-start flex-1 min-h-0">
+      <div className="flex flex-row gap-1.5 md:gap-3 items-start flex-1 min-h-0">
         {/* MOBILE SIDEBAR DRAWER (FOR PHONES) */}
         {mobileSidebarOpen && (
           <div className="fixed inset-0 z-50 flex md:hidden">
@@ -275,7 +275,7 @@ export const AdminDashboard = () => {
         )}
 
         {/* LEFT SIDEBAR NAVIGATION (DESKTOP & MINI-MOBILE) */}
-        <aside className={`${sidebarCollapsed ? 'w-[64px] md:w-[76px]' : 'w-[64px] md:w-64'} flex-shrink-0 glass-panel rounded-2xl p-2 md:p-3 flex flex-col justify-between border border-slate-800 sticky top-[52px] h-[calc(100vh-56px)] overflow-y-auto transition-all duration-300`}>
+        <aside className={`${sidebarCollapsed ? 'w-[52px] md:w-[68px]' : 'w-[52px] md:w-60'} flex-shrink-0 glass-panel rounded-2xl p-1.5 md:p-3 flex flex-col justify-between border border-slate-800 sticky top-[52px] h-[calc(100vh-56px)] overflow-y-auto transition-all duration-300`}>
           <div className="space-y-3 md:space-y-4 w-full">
             {/* Header Toggle */}
             <div className={`flex items-center ${sidebarCollapsed ? 'justify-center' : 'justify-center md:justify-between'} pb-2 border-b border-slate-850`}>
