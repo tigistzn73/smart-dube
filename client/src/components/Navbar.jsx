@@ -26,7 +26,9 @@ import {
   CheckCircle2,
   Building,
   Server,
-  Lock
+  Lock,
+  Maximize,
+  Minimize
 } from 'lucide-react';
 
 export const Navbar = () => {
@@ -36,7 +38,26 @@ export const Navbar = () => {
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [unreadAlertsCount, setUnreadAlertsCount] = useState(0);
+  const [isFullscreen, setIsFullscreen] = useState(false);
   const menuRef = useRef(null);
+
+  const toggleFullscreen = () => {
+    if (!document.fullscreenElement) {
+      document.documentElement.requestFullscreen().then(() => setIsFullscreen(true)).catch(() => {});
+    } else {
+      if (document.exitFullscreen) {
+        document.exitFullscreen().then(() => setIsFullscreen(false)).catch(() => {});
+      }
+    }
+  };
+
+  useEffect(() => {
+    const handleFsChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFsChange);
+    return () => document.removeEventListener('fullscreenchange', handleFsChange);
+  }, []);
 
   const t = (en, am) => (lang === 'EN' ? en : am);
 
@@ -288,6 +309,14 @@ export const Navbar = () => {
                 </button>
               </div>
               <ThemeChooser />
+              <button
+                onClick={toggleFullscreen}
+                className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl border border-slate-700/60 bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 hover:text-white transition-all flex items-center gap-1.5 cursor-pointer shadow-md text-xs font-bold"
+                title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+              >
+                {isFullscreen ? <Minimize className="w-3.5 h-3.5 text-emerald-400" /> : <Maximize className="w-3.5 h-3.5 text-emerald-400" />}
+                <span className="hidden md:inline text-[11px]">{isFullscreen ? "Exit Full" : "Full Screen"}</span>
+              </button>
             </div>
           )}
 
@@ -313,6 +342,15 @@ export const Navbar = () => {
           {/* User Profile Button with Integrated Theme Chooser */}
           {user && (
             <div className="flex items-center gap-2 sm:gap-3">
+              <button
+                onClick={toggleFullscreen}
+                className="p-1.5 sm:px-2.5 sm:py-1.5 rounded-xl border border-slate-700/60 bg-slate-800/80 hover:bg-slate-700/80 text-slate-300 hover:text-white transition-all flex items-center gap-1.5 cursor-pointer shadow-md text-xs font-bold"
+                title={isFullscreen ? "Exit Fullscreen" : "Fullscreen"}
+              >
+                {isFullscreen ? <Minimize className="w-3.5 h-3.5 text-emerald-400" /> : <Maximize className="w-3.5 h-3.5 text-emerald-400" />}
+                <span className="hidden md:inline text-[11px]">{isFullscreen ? "Exit Full" : "Full Screen"}</span>
+              </button>
+
               {/* Dropdown Menu Container with Customer Photo & Name */}
               <div className="relative" ref={menuRef}>
                 <button
