@@ -1,0 +1,74 @@
+<?php
+/**
+ * Plugin Name: Smart Dube (???? ??) - Ethiopian BNPL Digital Ledger
+ * Plugin URI: https://github.com/tigistzn73/smart-dube
+ * Description: Complete Buy-Now-Pay-Later (BNPL), neighborhood credit ledger, receipt OCR scanner, and SMS reminder system for Ethiopian merchants and customers.
+ * Version: 1.0.0
+ * Author: Tigist Zinabu & Smart Dube Team
+ * Author URI: https://github.com/tigistzn73
+ * License: GPL-2.0+
+ * Text Domain: smart-dube
+ */
+
+if (!defined('ABSPATH')) {
+    exit;
+}
+
+define('SMART_DUBE_VERSION', '1.0.1');
+define('SMART_DUBE_PLUGIN_DIR', plugin_dir_path(__FILE__));
+define('SMART_DUBE_PLUGIN_URL', plugin_dir_url(__FILE__));
+
+// Require Core Modules
+require_once SMART_DUBE_PLUGIN_DIR . 'includes/class-database.php';
+require_once SMART_DUBE_PLUGIN_DIR . 'includes/class-sms.php';
+require_once SMART_DUBE_PLUGIN_DIR . 'includes/class-api.php';
+require_once SMART_DUBE_PLUGIN_DIR . 'includes/class-admin.php';
+
+// Plugin Activation: Create database tables and seed demo data
+register_activation_hook(__FILE__, function() {
+    Smart_Dube_Database::init_tables();
+});
+
+// Register WordPress REST API Routes
+add_action('rest_api_init', function() {
+    Smart_Dube_API::register_routes();
+});
+
+// Initialize Admin Settings Page
+Smart_Dube_Admin::init();
+
+// Main App Render Callback
+function smart_dube_render_app_shortcode($atts = []) {
+    // 1. Enqueue React CSS
+    wp_enqueue_style(
+        'smart-dube-css',
+        SMART_DUBE_PLUGIN_URL . 'assets/index.css',
+        [],
+        SMART_DUBE_VERSION
+    );
+
+    // 2. Enqueue React Bundle JS
+    wp_enqueue_script(
+        'smart-dube-js',
+        SMART_DUBE_PLUGIN_URL . 'assets/index.js',
+        [],
+        SMART_DUBE_VERSION,
+        true
+    );
+
+    // 3. Pass WordPress REST API settings to React frontend
+    wp_localize_script('smart-dube-js', 'smartDubeSettings', [
+        'apiUrl' => rest_url('smart-dube/v1'),
+        'nonce'  => wp_create_nonce('wp_rest')
+    ]);
+
+    // 4. Output Root Mount Point for React
+    return '<div id="root" class="smart-dube-app-wrapper" style="min-height: 85vh; width: 100%;"></div>';
+}
+
+// Register all shortcode variations with brackets [smart_dube_app], [smart-dube-app], [smart_dube], [smart-dube], [smartdube]
+add_shortcode('smart_dube_app', 'smart_dube_render_app_shortcode');
+add_shortcode('smart-dube-app', 'smart_dube_render_app_shortcode');
+add_shortcode('smart_dube', 'smart_dube_render_app_shortcode');
+add_shortcode('smart-dube', 'smart_dube_render_app_shortcode');
+add_shortcode('smartdube', 'smart_dube_render_app_shortcode');
