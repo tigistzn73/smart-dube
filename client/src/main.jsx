@@ -3,6 +3,21 @@ import ReactDOM from 'react-dom/client';
 import App from './App.jsx';
 import './index.css';
 
+// Transparent WordPress REST API fetch interceptor
+if (typeof window !== 'undefined') {
+  const originalFetch = window.fetch;
+  window.fetch = function (resource, config) {
+    if (typeof resource === 'string' && resource.startsWith('/api')) {
+      if (window.smartDubeSettings && window.smartDubeSettings.apiUrl) {
+        const base = window.smartDubeSettings.apiUrl.replace(/\/+$/, '');
+        const path = resource.replace(/^\/api\//, '').replace(/^\//, '');
+        resource = `${base}/${path}`;
+      }
+    }
+    return originalFetch.call(this, resource, config);
+  };
+}
+
 function mountSmartDube() {
   const rootEl = document.getElementById('root') || document.querySelector('.smart-dube-app-wrapper');
   if (rootEl && !rootEl.__smartDubeMounted) {
