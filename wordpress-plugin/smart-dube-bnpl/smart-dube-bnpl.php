@@ -72,8 +72,12 @@ function smart_dube_render_app_shortcode($atts = []) {
         margin-left: 0 !important;
         margin-right: 0 !important;
     }
-    .entry-header, .page-header, .ast-single-post-order {
+    h1.entry-title, .entry-title, .entry-header, .page-header, .ast-single-post-order, .ast-archive-description {
         display: none !important;
+        visibility: hidden !important;
+        height: 0 !important;
+        margin: 0 !important;
+        padding: 0 !important;
     }
     .smart-dube-app-wrapper {
         width: 100% !important;
