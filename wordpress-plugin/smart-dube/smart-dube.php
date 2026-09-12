@@ -14,7 +14,7 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-define('SMART_DUBE_VERSION', '1.0.0');
+define('SMART_DUBE_VERSION', '1.0.1');
 define('SMART_DUBE_PLUGIN_DIR', plugin_dir_path(__FILE__));
 define('SMART_DUBE_PLUGIN_URL', plugin_dir_url(__FILE__));
 
@@ -37,8 +37,8 @@ add_action('rest_api_init', function() {
 // Initialize Admin Settings Page
 Smart_Dube_Admin::init();
 
-// Register Shortcode: [smart_dube_app]
-add_shortcode('smart_dube_app', function() {
+// Main App Render Callback
+function smart_dube_render_app_shortcode($atts = []) {
     // 1. Enqueue React CSS
     wp_enqueue_style(
         'smart-dube-css',
@@ -56,12 +56,19 @@ add_shortcode('smart_dube_app', function() {
         true
     );
 
-    // 3. Pass WordPress REST API base URL to React frontend
+    // 3. Pass WordPress REST API settings to React frontend
     wp_localize_script('smart-dube-js', 'smartDubeSettings', [
         'apiUrl' => rest_url('smart-dube/v1'),
         'nonce'  => wp_create_nonce('wp_rest')
     ]);
 
     // 4. Output Root Mount Point for React
-    return '<div id="root" class="smart-dube-app-wrapper" style="min-height: 80vh; width: 100%;"></div>';
-});
+    return '<div id="root" class="smart-dube-app-wrapper" style="min-height: 85vh; width: 100%;"></div>';
+}
+
+// Register all shortcode variations with brackets [smart_dube_app], [smart-dube-app], [smart_dube], [smart-dube], [smartdube]
+add_shortcode('smart_dube_app', 'smart_dube_render_app_shortcode');
+add_shortcode('smart-dube-app', 'smart_dube_render_app_shortcode');
+add_shortcode('smart_dube', 'smart_dube_render_app_shortcode');
+add_shortcode('smart-dube', 'smart_dube_render_app_shortcode');
+add_shortcode('smartdube', 'smart_dube_render_app_shortcode');
