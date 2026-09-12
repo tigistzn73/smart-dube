@@ -62,8 +62,29 @@ function smart_dube_render_app_shortcode($atts = []) {
         'nonce'  => wp_create_nonce('wp_rest')
     ]);
 
-    // 4. Output Root Mount Point for React
-    return '<div id="root" class="smart-dube-app-wrapper" style="min-height: 85vh; width: 100%;"></div>';
+    // 4. Output Root Mount Point for React with Full-Width Auto-Override
+    $output = '<style>
+    .ast-container, .site-content, .entry-content, .ast-article-single, .ast-separate-container {
+        max-width: 100% !important;
+        width: 100% !important;
+        padding-left: 0 !important;
+        padding-right: 0 !important;
+        margin-left: 0 !important;
+        margin-right: 0 !important;
+    }
+    .entry-header, .page-header, .ast-single-post-order {
+        display: none !important;
+    }
+    .smart-dube-app-wrapper {
+        width: 100% !important;
+        max-width: 100% !important;
+        min-height: 95vh !important;
+        margin: 0 !important;
+        padding: 0 !important;
+    }
+    </style>';
+    $output .= '<div id="root" class="smart-dube-app-wrapper" style="min-height: 90vh; width: 100%;"></div>';
+    return $output;
 }
 
 // Register all shortcode variations with brackets [smart_dube_app], [smart-dube-app], [smart_dube], [smart-dube], [smartdube]
