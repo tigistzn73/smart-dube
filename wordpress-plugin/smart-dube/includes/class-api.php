@@ -147,15 +147,38 @@ class Smart_Dube_API {
         return null;
     }
 
+    public static function normalize_phone($phone) {
+        $clean = preg_replace('/[^0-9]/', '', trim((string)$phone));
+        if (empty($clean)) return '';
+        if (strpos($clean, '251') === 0) {
+            return '+' . $clean;
+        }
+        if (strpos($clean, '0') === 0) {
+            return '+251' . substr($clean, 1);
+        }
+        if (strlen($clean) === 9) {
+            return '+251' . $clean;
+        }
+        return '+' . $clean;
+    }
+
     // 1. Auth: Login
     public static function login_user($request) {
         global $wpdb;
         $params = $request->get_json_params();
-        $phone = sanitize_text_field($params['phone'] ?? '');
-        $password = $params['password'] ?? '';
+        $raw_phone = trim($params['phone'] ?? '');
+        $normalized_phone = self::normalize_phone($raw_phone);
+        $clean_digits = preg_replace('/[^0-9]/', '', $raw_phone);
+        $last_9 = strlen($clean_digits) >= 9 ? substr($clean_digits, -9) : $clean_digits;
+        $password = trim($params['password'] ?? '');
 
         $table_users = $wpdb->prefix . 'dube_users';
-        $user = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_users WHERE phone = %s", $phone), ARRAY_A);
+        $user = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM $table_users WHERE phone = %s OR phone = %s OR phone LIKE %s",
+            $raw_phone,
+            $normalized_phone,
+            '%' . $last_9
+        ), ARRAY_A);
 
         if (!$user || !password_verify($password, $user['password_hash'])) {
             return new WP_REST_Response(['error' => 'Invalid phone number or password credentials.'], 401);
@@ -170,7 +193,22 @@ class Smart_Dube_API {
         $customerProfile = null;
         if ($user['role'] === 'CUSTOMER') {
             $table_cp = $wpdb->prefix . 'dube_customer_profiles';
-            $customerProfile = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE user_id = %d OR phone = %s", $user['id'], $user['phone']), ARRAY_A);
+            $customerProfile = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE user_id = %d OR phone = %s OR phone LIKE %s", $user['id'], $user['phone'], '%' . $last_9), ARRAY_A);
+            if (!$customerProfile) {
+                // Auto-create default profile for newly registered customers
+                $wpdb->insert($table_cp, [
+                    'merchant_id' => 1,
+                    'user_id' => $user['id'],
+                    'full_name' => $user['full_name'],
+                    'phone' => $user['phone'],
+                    'fayda_id' => !empty($user['fayda_id']) ? $user['fayda_id'] : 'FYD-' . rand(1000, 9999),
+                    'photo_url' => $user['photo_url'],
+                    'credit_limit' => 5000.00,
+                    'current_balance' => 0.00,
+                    'status' => 'ACTIVE'
+                ]);
+                $customerProfile = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE id = %d", $wpdb->insert_id), ARRAY_A);
+            }
         }
 
         // Generate standard token
@@ -209,22 +247,31 @@ class Smart_Dube_API {
         $params = $request->get_json_params();
         $table_users = $wpdb->prefix . 'dube_users';
 
-        $phone = sanitize_text_field($params['phone'] ?? '');
+        $raw_phone = trim($params['phone'] ?? '');
+        $normalized_phone = self::normalize_phone($raw_phone);
+        $clean_digits = preg_replace('/[^0-9]/', '', $raw_phone);
+        $last_9 = strlen($clean_digits) >= 9 ? substr($clean_digits, -9) : $clean_digits;
+
         $full_name = sanitize_text_field($params['fullName'] ?? '');
         $email = sanitize_email($params['email'] ?? '');
-        $role = sanitize_text_field($params['role'] ?? 'CUSTOMER');
-        $password = $params['password'] ?? '';
+        $role = strtoupper(sanitize_text_field($params['role'] ?? 'CUSTOMER'));
+        $password = trim($params['password'] ?? '');
         $fayda_id = sanitize_text_field($params['faydaId'] ?? '');
         $photo_url = sanitize_text_field($params['photoUrl'] ?? "https://api.dicebear.com/7.x/avataaars/svg?seed=" . urlencode($full_name));
 
-        $exists = $wpdb->get_var($wpdb->prepare("SELECT id FROM $table_users WHERE phone = %s", $phone));
+        $exists = $wpdb->get_var($wpdb->prepare(
+            "SELECT id FROM $table_users WHERE phone = %s OR phone = %s OR phone LIKE %s",
+            $raw_phone,
+            $normalized_phone,
+            '%' . $last_9
+        ));
         if ($exists) {
             return new WP_REST_Response(['error' => 'A user with this phone number already exists.'], 400);
         }
 
         $wpdb->insert($table_users, [
             'full_name' => $full_name,
-            'phone' => $phone,
+            'phone' => $normalized_phone,
             'email' => $email,
             'role' => $role,
             'password_hash' => password_hash($password, PASSWORD_BCRYPT),
@@ -244,11 +291,24 @@ class Smart_Dube_API {
                 'kyc_status' => 'PENDING'
             ]);
             $merchant = ['id' => $wpdb->insert_id, 'kycStatus' => 'PENDING'];
+        } elseif ($role === 'CUSTOMER') {
+            $table_cp = $wpdb->prefix . 'dube_customer_profiles';
+            $wpdb->insert($table_cp, [
+                'merchant_id' => 1,
+                'user_id' => $user_id,
+                'full_name' => $full_name,
+                'phone' => $normalized_phone,
+                'fayda_id' => !empty($fayda_id) ? $fayda_id : 'FYD-' . rand(1000, 9999),
+                'photo_url' => $photo_url,
+                'credit_limit' => 5000.00,
+                'current_balance' => 0.00,
+                'status' => 'ACTIVE'
+            ]);
         }
 
         return new WP_REST_Response([
             'message' => 'User registered successfully',
-            'user' => ['id' => $user_id, 'fullName' => $full_name, 'phone' => $phone, 'role' => $role, 'merchant' => $merchant]
+            'user' => ['id' => $user_id, 'fullName' => $full_name, 'phone' => $normalized_phone, 'role' => $role, 'merchant' => $merchant]
         ], 201);
     }
 
