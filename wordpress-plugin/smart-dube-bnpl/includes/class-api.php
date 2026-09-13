@@ -291,7 +291,10 @@ class Smart_Dube_API {
                 'kyc_status' => 'PENDING'
             ]);
             $merchant = ['id' => $wpdb->insert_id, 'kycStatus' => 'PENDING'];
-        } elseif ($role === 'CUSTOMER') {
+        }
+
+        $customerProfile = null;
+        if ($role === 'CUSTOMER') {
             $table_cp = $wpdb->prefix . 'dube_customer_profiles';
             $wpdb->insert($table_cp, [
                 'merchant_id' => 1,
@@ -304,11 +307,36 @@ class Smart_Dube_API {
                 'current_balance' => 0.00,
                 'status' => 'ACTIVE'
             ]);
+            $customerProfile = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE id = %d", $wpdb->insert_id), ARRAY_A);
         }
+
+        // Generate standard token for instant auto-login
+        $header = base64_encode(json_encode(['typ' => 'JWT', 'alg' => 'HS256']));
+        $payload = base64_encode(json_encode([
+            'id' => $user_id,
+            'fullName' => $full_name,
+            'phone' => $normalized_phone,
+            'role' => $role,
+            'merchantId' => $merchant ? $merchant['id'] : null,
+            'customerId' => $customerProfile ? $customerProfile['id'] : null,
+            'exp' => time() + (7 * 86400)
+        ]));
+        $token = "$header.$payload.wp_signature";
 
         return new WP_REST_Response([
             'message' => 'User registered successfully',
-            'user' => ['id' => $user_id, 'fullName' => $full_name, 'phone' => $normalized_phone, 'role' => $role, 'merchant' => $merchant]
+            'token' => $token,
+            'user' => [
+                'id' => $user_id,
+                'fullName' => $full_name,
+                'phone' => $normalized_phone,
+                'role' => $role,
+                'faydaId' => $fayda_id,
+                'photo_url' => $photo_url,
+                'photoUrl' => $photo_url,
+                'merchant' => $merchant,
+                'customerProfile' => $customerProfile
+            ]
         ], 201);
     }
 

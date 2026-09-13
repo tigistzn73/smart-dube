@@ -87,6 +87,9 @@ export const AuthProvider = ({ children }) => {
     });
     const data = await res.json();
     if (!res.ok) throw new Error(data.error || 'Registration failed.');
+    if (data.token && data.user) {
+      loginWithToken(data.token, data.user);
+    }
     return data;
   };
 
