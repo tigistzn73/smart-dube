@@ -165,6 +165,8 @@ class Smart_Dube_API {
     // 1. Auth: Login
     public static function login_user($request) {
         global $wpdb;
+        Smart_Dube_Database::maybe_init_tables();
+        
         $params = $request->get_json_params();
         $raw_phone = trim($params['phone'] ?? '');
         $normalized_phone = self::normalize_phone($raw_phone);
@@ -174,21 +176,27 @@ class Smart_Dube_API {
 
         $table_users = $wpdb->prefix . 'dube_users';
         $user = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM $table_users WHERE phone = %s OR phone = %s OR phone LIKE %s ORDER BY id DESC LIMIT 1",
+            "SELECT * FROM $table_users WHERE phone = %s OR phone = %s OR phone = %s OR phone = %s OR phone LIKE %s ORDER BY id DESC LIMIT 1",
             $raw_phone,
             $normalized_phone,
-            '%' . $last_9
+            '+251' . $last_9,
+            '0' . $last_9,
+            '%' . $wpdb->esc_like($last_9)
         ), ARRAY_A);
 
         $is_valid_pass = false;
         if ($user && !empty($user['password_hash'])) {
-            if (password_verify($password, $user['password_hash'])) {
-                $is_valid_pass = true;
-            } elseif (password_verify(trim($password), $user['password_hash'])) {
-                $is_valid_pass = true;
-            } elseif (password_verify(stripslashes($password), $user['password_hash'])) {
-                $is_valid_pass = true;
-            } elseif ($user['password_hash'] === $password || $user['password_hash'] === md5($password)) {
+            $stored_hash = trim($user['password_hash']);
+            if (password_verify($password, $stored_hash) ||
+                password_verify(trim($password), $stored_hash) ||
+                password_verify(stripslashes($password), $stored_hash) ||
+                password_verify(urldecode($password), $stored_hash) ||
+                password_verify(html_entity_decode($password), $stored_hash) ||
+                wp_check_password($password, $stored_hash) ||
+                wp_check_password(trim($password), $stored_hash) ||
+                $stored_hash === $password ||
+                $stored_hash === md5($password) ||
+                $stored_hash === sha1($password)) {
                 $is_valid_pass = true;
             }
         }
@@ -206,7 +214,7 @@ class Smart_Dube_API {
         $customerProfile = null;
         if ($user['role'] === 'CUSTOMER') {
             $table_cp = $wpdb->prefix . 'dube_customer_profiles';
-            $customerProfile = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE user_id = %d OR phone = %s OR phone LIKE %s", $user['id'], $user['phone'], '%' . $last_9), ARRAY_A);
+            $customerProfile = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE user_id = %d OR phone = %s OR phone LIKE %s", $user['id'], $user['phone'], '%' . $wpdb->esc_like($last_9)), ARRAY_A);
             if (!$customerProfile) {
                 // Auto-create default profile for newly registered customers
                 $wpdb->insert($table_cp, [
@@ -257,6 +265,8 @@ class Smart_Dube_API {
     // 2. Auth: Register
     public static function register_user($request) {
         global $wpdb;
+        Smart_Dube_Database::maybe_init_tables();
+        
         $params = $request->get_json_params();
         $table_users = $wpdb->prefix . 'dube_users';
 
@@ -272,35 +282,61 @@ class Smart_Dube_API {
         $fayda_id = sanitize_text_field($params['faydaId'] ?? '');
         $photo_url = sanitize_text_field($params['photoUrl'] ?? "https://api.dicebear.com/7.x/avataaars/svg?seed=" . urlencode($full_name));
 
+        if (empty($normalized_phone) || empty($password)) {
+            return new WP_REST_Response(['error' => 'Phone and password are required.'], 400);
+        }
+
+        $password_hash = password_hash($password, PASSWORD_BCRYPT);
+
         $exists_user = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM $table_users WHERE phone = %s OR phone = %s OR phone LIKE %s ORDER BY id DESC LIMIT 1",
+            "SELECT * FROM $table_users WHERE phone = %s OR phone = %s OR phone = %s OR phone = %s OR phone LIKE %s ORDER BY id DESC LIMIT 1",
             $raw_phone,
             $normalized_phone,
-            '%' . $last_9
+            '+251' . $last_9,
+            '0' . $last_9,
+            '%' . $wpdb->esc_like($last_9)
         ), ARRAY_A);
 
         if ($exists_user) {
             // Update existing user with new password and info!
-            $wpdb->update($table_users, [
-                'full_name' => $full_name,
-                'email' => $email,
-                'role' => $role,
-                'password_hash' => password_hash($password, PASSWORD_BCRYPT),
-                'fayda_id' => $fayda_id,
-                'photo_url' => $photo_url
-            ], ['id' => $exists_user['id']]);
             $user_id = $exists_user['id'];
-        } else {
-            $wpdb->insert($table_users, [
+            $wpdb->update($table_users, [
                 'full_name' => $full_name,
                 'phone' => $normalized_phone,
                 'email' => $email,
                 'role' => $role,
-                'password_hash' => password_hash($password, PASSWORD_BCRYPT),
+                'password_hash' => $password_hash,
+                'fayda_id' => $fayda_id,
+                'photo_url' => $photo_url
+            ], ['id' => $user_id]);
+        } else {
+            $insert_res = $wpdb->insert($table_users, [
+                'full_name' => $full_name,
+                'phone' => $normalized_phone,
+                'email' => $email,
+                'role' => $role,
+                'password_hash' => $password_hash,
                 'fayda_id' => $fayda_id,
                 'photo_url' => $photo_url
             ]);
-            $user_id = $wpdb->insert_id;
+            
+            if ($insert_res === false) {
+                // If unique key or duplicate, fallback to update
+                $exists_fallback = $wpdb->get_row($wpdb->prepare("SELECT id FROM $table_users WHERE phone LIKE %s ORDER BY id DESC LIMIT 1", '%' . $wpdb->esc_like($last_9)), ARRAY_A);
+                if ($exists_fallback) {
+                    $user_id = $exists_fallback['id'];
+                    $wpdb->update($table_users, [
+                        'full_name' => $full_name,
+                        'phone' => $normalized_phone,
+                        'role' => $role,
+                        'password_hash' => $password_hash
+                    ], ['id' => $user_id]);
+                } else {
+                    return new WP_REST_Response(['error' => 'Database error during registration: ' . $wpdb->last_error], 500);
+                }
+            } else {
+                $user_id = $wpdb->insert_id;
+            }
         }
 
         $merchant = null;
@@ -324,7 +360,7 @@ class Smart_Dube_API {
         $customerProfile = null;
         if ($role === 'CUSTOMER') {
             $table_cp = $wpdb->prefix . 'dube_customer_profiles';
-            $exists_cp = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE user_id = %d OR phone = %s OR phone LIKE %s", $user_id, $normalized_phone, '%' . $last_9), ARRAY_A);
+            $exists_cp = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE user_id = %d OR phone = %s OR phone LIKE %s", $user_id, $normalized_phone, '%' . $wpdb->esc_like($last_9)), ARRAY_A);
             if (!$exists_cp) {
                 $wpdb->insert($table_cp, [
                     'merchant_id' => 1,

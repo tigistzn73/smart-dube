@@ -11,6 +11,18 @@ if (!defined('ABSPATH')) {
 
 class Smart_Dube_Database {
 
+    public static function maybe_init_tables() {
+        global $wpdb;
+        $table_users = $wpdb->prefix . 'dube_users';
+        $exists = $wpdb->get_var("SHOW TABLES LIKE '$table_users'");
+        if ($exists !== $table_users) {
+            self::init_tables();
+        } else {
+            // Ensure password_hash column is wide enough in existing installations
+            @$wpdb->query("ALTER TABLE $table_users MODIFY password_hash VARCHAR(255) NOT NULL");
+        }
+    }
+
     public static function init_tables() {
         global $wpdb;
         $charset_collate = $wpdb->get_charset_collate();
@@ -25,7 +37,7 @@ class Smart_Dube_Database {
             phone varchar(20) NOT NULL,
             email varchar(200) DEFAULT NULL,
             role varchar(20) NOT NULL,
-            password_hash text NOT NULL,
+            password_hash varchar(255) NOT NULL,
             fayda_id varchar(50) DEFAULT NULL,
             photo_url text DEFAULT NULL,
             reset_token varchar(10) DEFAULT NULL,
@@ -35,6 +47,7 @@ class Smart_Dube_Database {
             UNIQUE KEY phone (phone)
         ) $charset_collate;";
         dbDelta($sql_users);
+        @$wpdb->query("ALTER TABLE $table_users MODIFY password_hash VARCHAR(255) NOT NULL");
 
         // 2. Merchants table
         $table_merchants = $wpdb->prefix . 'dube_merchants';

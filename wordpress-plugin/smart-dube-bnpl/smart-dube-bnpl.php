@@ -29,8 +29,14 @@ register_activation_hook(__FILE__, function() {
     Smart_Dube_Database::init_tables();
 });
 
+// Auto-ensure database schema is ready on every REST API & page request
+add_action('init', function() {
+    Smart_Dube_Database::maybe_init_tables();
+});
+
 // Register WordPress REST API Routes
 add_action('rest_api_init', function() {
+    Smart_Dube_Database::maybe_init_tables();
     Smart_Dube_API::register_routes();
 });
 
