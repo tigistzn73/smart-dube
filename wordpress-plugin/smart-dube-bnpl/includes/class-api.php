@@ -491,11 +491,54 @@ class Smart_Dube_API {
             return new WP_REST_Response(['message' => 'Credit transaction logged successfully', 'transactionRef' => $tx_ref], 201);
         }
 
-        $transactions = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table_tx WHERE merchant_id = %d ORDER BY id DESC", $merchant_id), ARRAY_A);
-        $table_rep = $wpdb->prefix . 'dube_repayments';
-        $pendingReceipts = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table_rep WHERE merchant_id = %d AND status = 'PENDING'", $merchant_id), ARRAY_A);
+        $transactions = $wpdb->get_results($wpdb->prepare(
+            "SELECT tx.*, cp.full_name as customer_name, cp.phone as customer_phone 
+             FROM $table_tx tx 
+             LEFT JOIN $table_cp cp ON tx.customer_id = cp.id 
+             WHERE tx.merchant_id = %d 
+             ORDER BY tx.id DESC", 
+            $merchant_id
+        ), ARRAY_A);
 
-        return new WP_REST_Response(['transactions' => $transactions, 'pendingReceipts' => $pendingReceipts], 200);
+        if (!empty($transactions)) {
+            foreach ($transactions as &$tx) {
+                if (!empty($tx['items_json'])) {
+                    $decoded = json_decode($tx['items_json'], true);
+                    $tx['items'] = is_array($decoded) ? $decoded : [];
+                } else {
+                    $tx['items'] = [];
+                }
+                $tx['total_amount'] = floatval($tx['total_amount'] ?? 0);
+            }
+            unset($tx);
+        } else {
+            $transactions = [];
+        }
+
+        $table_rep = $wpdb->prefix . 'dube_repayments';
+        $repayments = $wpdb->get_results($wpdb->prepare(
+            "SELECT rep.*, cp.full_name as customer_name, cp.phone as customer_phone 
+             FROM $table_rep rep 
+             LEFT JOIN $table_cp cp ON rep.customer_id = cp.id 
+             WHERE rep.merchant_id = %d 
+             ORDER BY rep.id DESC", 
+            $merchant_id
+        ), ARRAY_A);
+
+        if (!empty($repayments)) {
+            foreach ($repayments as &$r) {
+                $r['amount'] = floatval($r['amount'] ?? 0);
+            }
+            unset($r);
+        } else {
+            $repayments = [];
+        }
+
+        return new WP_REST_Response([
+            'transactions' => $transactions,
+            'repayments' => $repayments,
+            'pendingReceipts' => array_values(array_filter($repayments, function($r) { return $r['status'] === 'PENDING'; }))
+        ], 200);
     }
 
     // 7. Approve Repayment
