@@ -514,60 +514,77 @@ export const CustomerPortal = () => {
                   {profiles.length} {t('Active Ledgers', 'ገባሪ አካውንቶች')}
                 </span>
               </div>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {profiles.map(p => {
-                  const creditLimit = parseFloat(p.credit_limit || 0);
-                  const currentBalance = parseFloat(p.current_balance || 0);
-                  const availableLimit = Math.max(0, creditLimit - currentBalance);
-                  const utilization = creditLimit > 0 ? Math.min(100, Math.round((currentBalance / creditLimit) * 100)) : 0;
+              {profiles.length === 0 ? (
+                <div className="glass-panel p-8 rounded-2xl border border-slate-800 text-center space-y-3">
+                  <div className="w-12 h-12 rounded-2xl bg-slate-800/80 text-slate-400 border border-slate-700 flex items-center justify-center mx-auto">
+                    <Store className="w-6 h-6 text-amber-400" />
+                  </div>
+                  <h4 className="font-extrabold text-sm text-slate-200">
+                    {t('No Linked Merchants Yet', 'ምንም የተገናኙ ነጋዴዎች የሉም')}
+                  </h4>
+                  <p className="text-xs text-slate-400 max-w-md mx-auto">
+                    {t(
+                      'You do not have any active merchant credit ledgers yet. When a neighborhood store (like Arada Supermarket or Zemero) registers or extends credit to your phone number, your store ledger and approved credit limit will appear here.',
+                      'እስካሁን ከየትኛውም የነጋዴ ዱቤ አካውንት ጋር አልተገናኙም። የሰፈር ነጋዴዎች በስልክ ቁጥርዎ ወይም በፋይዳ መታወቂያዎ ዱቤ ሲፈቅዱልዎት፣ የብድር ገደብዎ እና አካውንትዎ እዚህ ይታያል።'
+                    )}
+                  </p>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {profiles.map(p => {
+                    const creditLimit = parseFloat(p.credit_limit || 0);
+                    const currentBalance = parseFloat(p.current_balance || 0);
+                    const availableLimit = Math.max(0, creditLimit - currentBalance);
+                    const utilization = creditLimit > 0 ? Math.min(100, Math.round((currentBalance / creditLimit) * 100)) : 0;
 
-                  return (
-                    <div key={p.id} className="glass-card p-4 sm:p-5 rounded-2xl border border-slate-800 space-y-3.5 hover:border-slate-700 transition-all shadow-md">
-                      {/* Top Row: Store Name & Address */}
-                      <div className="flex justify-between items-start gap-3">
-                        <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center font-bold shrink-0">
-                            <Store className="w-5 h-5" />
+                    return (
+                      <div key={p.id} className="glass-card p-4 sm:p-5 rounded-2xl border border-slate-800 space-y-3.5 hover:border-slate-700 transition-all shadow-md">
+                        {/* Top Row: Store Name & Address */}
+                        <div className="flex justify-between items-start gap-3">
+                          <div className="flex items-center gap-3">
+                            <div className="w-10 h-10 rounded-xl bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 flex items-center justify-center font-bold shrink-0">
+                              <Store className="w-5 h-5" />
+                            </div>
+                            <div>
+                              <h4 className="font-bold text-sm text-slate-100">{p.store_name}</h4>
+                              <p className="text-xs text-slate-400 mt-0.5">{p.store_address}</p>
+                            </div>
                           </div>
+                          <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold font-mono ${
+                            p.status === 'ACTIVE'
+                              ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
+                              : 'bg-red-500/20 text-red-400 border border-red-500/30'
+                          }`}>
+                            {p.status || 'ACTIVE'}
+                          </span>
+                        </div>
+
+                        {/* Middle Stats Grid: Approved Limit, Account Debt, Available Limit */}
+                        <div className="grid grid-cols-3 gap-2 p-3 rounded-xl bg-slate-950/60 border border-slate-850">
                           <div>
-                            <h4 className="font-bold text-sm text-slate-100">{p.store_name}</h4>
-                            <p className="text-xs text-slate-400 mt-0.5">{p.store_address}</p>
+                            <p className="text-[10px] text-slate-400 font-semibold">{t('Approved Limit:', 'የተፈቀደ ገደብ፦')}</p>
+                            <p className="font-extrabold text-sky-400 text-xs sm:text-sm font-mono mt-0.5">
+                              {creditLimit.toFixed(2)} <span className="text-[9px] font-sans">ETB</span>
+                            </p>
+                          </div>
+                          <div className="text-center border-x border-slate-800/80 px-1">
+                            <p className="text-[10px] text-slate-400 font-semibold">{t('Account Debt:', 'የአካውንት እዳ፦')}</p>
+                            <p className="font-extrabold text-amber-400 text-xs sm:text-sm font-mono mt-0.5">
+                              {currentBalance.toFixed(2)} <span className="text-[9px] font-sans">ETB</span>
+                            </p>
+                          </div>
+                          <div className="text-right">
+                            <p className="text-[10px] text-slate-400 font-semibold">{t('Available Limit:', 'ቀሪ ገደብ፦')}</p>
+                            <p className="font-extrabold text-emerald-400 text-xs sm:text-sm font-mono mt-0.5">
+                              {availableLimit.toFixed(2)} <span className="text-[9px] font-sans">ETB</span>
+                            </p>
                           </div>
                         </div>
-                        <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold font-mono ${
-                          p.status === 'ACTIVE'
-                            ? 'bg-emerald-500/20 text-emerald-400 border border-emerald-500/30'
-                            : 'bg-red-500/20 text-red-400 border border-red-500/30'
-                        }`}>
-                          {p.status || 'ACTIVE'}
-                        </span>
                       </div>
-
-                      {/* Middle Stats Grid: Approved Limit, Account Debt, Available Limit */}
-                      <div className="grid grid-cols-3 gap-2 p-3 rounded-xl bg-slate-950/60 border border-slate-850">
-                        <div>
-                          <p className="text-[10px] text-slate-400 font-semibold">{t('Approved Limit:', 'የተፈቀደ ገደብ፦')}</p>
-                          <p className="font-extrabold text-sky-400 text-xs sm:text-sm font-mono mt-0.5">
-                            {creditLimit.toFixed(2)} <span className="text-[9px] font-sans">ETB</span>
-                          </p>
-                        </div>
-                        <div className="text-center border-x border-slate-800/80 px-1">
-                          <p className="text-[10px] text-slate-400 font-semibold">{t('Account Debt:', 'የአካውንት እዳ፦')}</p>
-                          <p className="font-extrabold text-amber-400 text-xs sm:text-sm font-mono mt-0.5">
-                            {currentBalance.toFixed(2)} <span className="text-[9px] font-sans">ETB</span>
-                          </p>
-                        </div>
-                        <div className="text-right">
-                          <p className="text-[10px] text-slate-400 font-semibold">{t('Available Limit:', 'ቀሪ ገደብ፦')}</p>
-                          <p className="font-extrabold text-emerald-400 text-xs sm:text-sm font-mono mt-0.5">
-                            {availableLimit.toFixed(2)} <span className="text-[9px] font-sans">ETB</span>
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              )}
             </div>
           )}
 

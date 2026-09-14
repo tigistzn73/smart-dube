@@ -215,21 +215,6 @@ class Smart_Dube_API {
         if ($user['role'] === 'CUSTOMER') {
             $table_cp = $wpdb->prefix . 'dube_customer_profiles';
             $customerProfile = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE user_id = %d OR phone = %s OR phone LIKE %s", $user['id'], $user['phone'], '%' . $wpdb->esc_like($last_9)), ARRAY_A);
-            if (!$customerProfile) {
-                // Auto-create default profile for newly registered customers
-                $wpdb->insert($table_cp, [
-                    'merchant_id' => 1,
-                    'user_id' => $user['id'],
-                    'full_name' => $user['full_name'],
-                    'phone' => $user['phone'],
-                    'fayda_id' => !empty($user['fayda_id']) ? $user['fayda_id'] : 'FYD-' . rand(1000, 9999),
-                    'photo_url' => $user['photo_url'],
-                    'credit_limit' => 5000.00,
-                    'current_balance' => 0.00,
-                    'status' => 'ACTIVE'
-                ]);
-                $customerProfile = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE id = %d", $wpdb->insert_id), ARRAY_A);
-            }
         }
 
         // Generate standard token
@@ -344,23 +329,7 @@ class Smart_Dube_API {
         $customerProfile = null;
         if ($role === 'CUSTOMER') {
             $table_cp = $wpdb->prefix . 'dube_customer_profiles';
-            $exists_cp = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE user_id = %d OR phone = %s OR phone LIKE %s", $user_id, $normalized_phone, '%' . $wpdb->esc_like($last_9)), ARRAY_A);
-            if (!$exists_cp) {
-                $wpdb->insert($table_cp, [
-                    'merchant_id' => 1,
-                    'user_id' => $user_id,
-                    'full_name' => $full_name,
-                    'phone' => $normalized_phone,
-                    'fayda_id' => !empty($fayda_id) ? $fayda_id : 'FYD-' . rand(1000, 9999),
-                    'photo_url' => $photo_url,
-                    'credit_limit' => 5000.00,
-                    'current_balance' => 0.00,
-                    'status' => 'ACTIVE'
-                ]);
-                $customerProfile = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE id = %d", $wpdb->insert_id), ARRAY_A);
-            } else {
-                $customerProfile = $exists_cp;
-            }
+            $customerProfile = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE user_id = %d OR phone = %s OR phone LIKE %s", $user_id, $normalized_phone, '%' . $wpdb->esc_like($last_9)), ARRAY_A);
         }
 
         // Generate standard token for instant auto-login
@@ -568,12 +537,26 @@ class Smart_Dube_API {
         ), ARRAY_A);
 
         $transactions = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table_tx WHERE customer_id IN (SELECT id FROM $table_cp WHERE user_id = %d)", $user_id), ARRAY_A);
-        $repayments = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table_rep WHERE customer_id IN (SELECT id FROM $table_cp WHERE user_id = %d)", $user_id), ARRAY_A);
+        $total_limit = 0;
+        $total_balance = 0;
+        if (!empty($profiles)) {
+            foreach ($profiles as $p) {
+                $total_limit += floatval($p['credit_limit'] ?? 0);
+                $total_balance += floatval($p['current_balance'] ?? 0);
+            }
+        }
+        $available_credit = max(0, $total_limit - $total_balance);
 
         return new WP_REST_Response([
-            'profiles' => $profiles,
-            'transactions' => $transactions,
-            'repayments' => $repayments
+            'profiles' => $profiles ? $profiles : [],
+            'summary' => [
+                'totalCreditLimit' => $total_limit,
+                'totalBalance' => $total_balance,
+                'availableCredit' => $available_credit,
+                'activeAccountsCount' => is_array($profiles) ? count($profiles) : 0
+            ],
+            'transactions' => $transactions ? $transactions : [],
+            'repayments' => $repayments ? $repayments : []
         ], 200);
     }
 
