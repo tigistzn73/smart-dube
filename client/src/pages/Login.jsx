@@ -128,7 +128,9 @@ export const Login = () => {
     }
 
     try {
-      const data = await register({
+      const registeredPhone = regForm.phone;
+      const registeredPassword = regForm.password;
+      await register({
         fullName: regForm.fullName,
         phone: regForm.phone,
         email: regForm.email || undefined,
@@ -141,17 +143,13 @@ export const Login = () => {
         photoUrl: regForm.role === 'CUSTOMER' ? (regForm.photoUrl || undefined) : undefined
       });
       
-      setSuccess('Account created successfully! Logging you in...');
-      if (data && data.token && data.user) {
-        loginWithToken(data.token, data.user);
-      } else {
-        setPhone(regForm.phone);
-        setPassword('');
-        setTimeout(() => {
-          setAuthView('SIGN_IN');
-          setSuccess('');
-        }, 2000);
-      }
+      setPhone(registeredPhone);
+      setPassword(registeredPassword);
+      setSuccess('Account registered successfully! Redirecting to Sign In...');
+      setTimeout(() => {
+        setAuthView('SIGN_IN');
+        setSuccess('Registration successful! Click "Sign In" to enter your account.');
+      }, 1000);
     } catch (err) {
       setError(err.message);
     } finally {

@@ -78,18 +78,20 @@ export const AuthProvider = ({ children }) => {
     }
   };
 
-  // Register new user account
+  // Register new user account (returns response data without auto-login)
   const register = async ({ fullName, phone, email, role, password, faydaId, storeName, businessLicenseNo, address, photoUrl }) => {
     const res = await fetch('/api/auth/register', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ fullName, phone, email, role, password, faydaId, storeName, businessLicenseNo, address, photoUrl })
     });
-    const data = await res.json();
-    if (!res.ok) throw new Error(data.error || 'Registration failed.');
-    if (data.token && data.user) {
-      loginWithToken(data.token, data.user);
+    let data = {};
+    try {
+      data = await res.json();
+    } catch {
+      throw new Error('Server response error during registration.');
     }
+    if (!res.ok) throw new Error(data.error || 'Registration failed.');
     return data;
   };
 
