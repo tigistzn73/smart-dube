@@ -91,7 +91,7 @@ export const ReceiptModal = ({ isOpen, onClose, receipt }) => {
 
             <div className="pt-2 flex justify-between items-end">
               <p className="text-xs text-slate-400 uppercase tracking-wider font-semibold print:text-gray-500">Amount Paid</p>
-              <p className="text-2xl font-extrabold text-sky-400 print:text-black">{receipt.amount.toFixed(2)} ETB</p>
+              <p className="text-2xl font-extrabold text-sky-400 print:text-black">{(parseFloat(receipt.amount) || 0).toFixed(2)} ETB</p>
             </div>
 
           </div>

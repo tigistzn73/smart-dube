@@ -35,6 +35,8 @@ export const PaymentModal = ({ isOpen, onClose, transaction, customerId, onPayme
   const [detectedCode, setDetectedCode] = useState(null);
   const fileInputRef = useRef(null);
 
+  const fmt = (val, d = 2) => (parseFloat(val) || 0).toFixed(d);
+
   if (!isOpen || !transaction) return null;
 
   const handleCopy = (text) => {
@@ -268,7 +270,7 @@ export const PaymentModal = ({ isOpen, onClose, transaction, customerId, onPayme
               </div>
               <div className="flex justify-between py-1 border-b border-slate-800">
                 <span className="text-slate-400">Total Amount Paid:</span>
-                <span className="text-emerald-400 font-bold">{successReceipt.amount.toFixed(2)} ETB</span>
+                <span className="text-emerald-400 font-bold">{fmt(successReceipt.amount)} ETB</span>
               </div>
 
               {/* Multi-Merchant Allocations List in Receipt */}
@@ -278,7 +280,7 @@ export const PaymentModal = ({ isOpen, onClose, transaction, customerId, onPayme
                   {successReceipt.allocations.map((alloc, i) => (
                     <div key={i} className="flex justify-between items-center py-0.5 px-2 bg-slate-950/60 rounded border border-slate-800">
                       <span className="text-slate-300 truncate max-w-[200px]">🏪 {alloc.storeName}</span>
-                      <span className="text-emerald-400 font-bold">{alloc.allocatedAmount.toFixed(2)} ETB</span>
+                      <span className="text-emerald-400 font-bold">{fmt(alloc.allocatedAmount)} ETB</span>
                     </div>
                   ))}
                 </div>
@@ -322,7 +324,7 @@ export const PaymentModal = ({ isOpen, onClose, transaction, customerId, onPayme
                   {transaction.merchantAllocations.map((m, idx) => (
                     <div key={idx} className="flex justify-between items-center py-1 px-2 rounded-lg bg-slate-950/60 border border-slate-800/80">
                       <span className="text-slate-300">🏪 {m.store_name}</span>
-                      <span className="text-emerald-400 font-bold">{m.shareAmount.toFixed(2)} ETB</span>
+                      <span className="text-emerald-400 font-bold">{fmt(m.shareAmount)} ETB</span>
                     </div>
                   ))}
                 </div>
@@ -347,7 +349,7 @@ export const PaymentModal = ({ isOpen, onClose, transaction, customerId, onPayme
               </div>
               <div className="text-right">
                 <p className="text-slate-400">Outstanding Balance:</p>
-                <p className="font-extrabold text-amber-400 text-sm">{transaction.total_amount.toFixed(2)} ETB</p>
+                <p className="font-extrabold text-amber-400 text-sm">{fmt(transaction.total_amount)} ETB</p>
               </div>
             </div>
 

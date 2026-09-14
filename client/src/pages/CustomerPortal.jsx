@@ -385,7 +385,7 @@ export const CustomerPortal = () => {
                   <div className="flex justify-between items-start mb-1.5">
                     <div>
                       <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{t('Total Dube Debt Balance', 'አጠቃላይ የዱቤ ብድር ቀሪ ሂሳብ')}</p>
-                      <h2 className="text-xl md:text-2xl font-black text-amber-400 mt-0.5">{summary.totalBalance.toFixed(2)} ETB</h2>
+                      <h2 className="text-xl md:text-2xl font-black text-amber-400 mt-0.5">{fmt(summary.totalBalance)} ETB</h2>
                     </div>
                     <div className="p-2 bg-amber-500/10 text-amber-400 rounded-lg border border-amber-500/20 shrink-0">
                       <Wallet className="w-4 h-4" />
@@ -399,13 +399,13 @@ export const CustomerPortal = () => {
                   <div className="flex justify-between items-start mb-1.5">
                     <div>
                       <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider">{t('Approved Credit Limit', 'የተፈቀደ የዱቤ መጠን')}</p>
-                      <h2 className="text-xl md:text-2xl font-black text-emerald-400 mt-0.5">{summary.totalCreditLimit.toFixed(2)} ETB</h2>
+                      <h2 className="text-xl md:text-2xl font-black text-emerald-400 mt-0.5">{fmt(summary.totalCreditLimit)} ETB</h2>
                     </div>
                     <div className="p-2 bg-emerald-500/10 text-emerald-400 rounded-lg border border-emerald-500/20 shrink-0">
                       <ShieldCheck className="w-4 h-4" />
                     </div>
                   </div>
-                  <p className="text-[11px] text-slate-400">{t(`Available: ${summary.availableCredit.toFixed(2)} ETB remaining`, `የቀረ ነጻ ዱቤ፡ ${summary.availableCredit.toFixed(2)} ETB`)}</p>
+                  <p className="text-[11px] text-slate-400">{t(`Available: ${fmt(summary.availableCredit)} ETB remaining`, `የቀረ ነጻ ዱቤ፡ ${fmt(summary.availableCredit)} ETB`)}</p>
                 </div>
               </div>
 
@@ -565,19 +565,19 @@ export const CustomerPortal = () => {
                           <div>
                             <p className="text-[10px] text-slate-400 font-semibold">{t('Approved Limit:', 'የተፈቀደ ገደብ፦')}</p>
                             <p className="font-extrabold text-sky-400 text-xs sm:text-sm font-mono mt-0.5">
-                              {creditLimit.toFixed(2)} <span className="text-[9px] font-sans">ETB</span>
+                              {fmt(creditLimit)} <span className="text-[9px] font-sans">ETB</span>
                             </p>
                           </div>
                           <div className="text-center border-x border-slate-800/80 px-1">
                             <p className="text-[10px] text-slate-400 font-semibold">{t('Account Debt:', 'የአካውንት እዳ፦')}</p>
                             <p className="font-extrabold text-amber-400 text-xs sm:text-sm font-mono mt-0.5">
-                              {currentBalance.toFixed(2)} <span className="text-[9px] font-sans">ETB</span>
+                              {fmt(currentBalance)} <span className="text-[9px] font-sans">ETB</span>
                             </p>
                           </div>
                           <div className="text-right">
                             <p className="text-[10px] text-slate-400 font-semibold">{t('Available Limit:', 'ቀሪ ገደብ፦')}</p>
                             <p className="font-extrabold text-emerald-400 text-xs sm:text-sm font-mono mt-0.5">
-                              {availableLimit.toFixed(2)} <span className="text-[9px] font-sans">ETB</span>
+                              {fmt(availableLimit)} <span className="text-[9px] font-sans">ETB</span>
                             </p>
                           </div>
                         </div>

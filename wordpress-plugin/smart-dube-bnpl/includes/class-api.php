@@ -121,8 +121,14 @@ class Smart_Dube_API {
         ]);
 
         register_rest_route($namespace, '/admin/kyc/(?P<id>\d+)', [
-            'methods'  => 'POST',
+            'methods'  => ['POST', 'PUT'],
             'callback' => [__CLASS__, 'update_merchant_kyc'],
+            'permission_callback' => '__return_true'
+        ]);
+
+        register_rest_route($namespace, '/admin/webhook-test', [
+            'methods'  => 'POST',
+            'callback' => [__CLASS__, 'handle_webhook_test'],
             'permission_callback' => '__return_true'
         ]);
     }
@@ -138,7 +144,12 @@ class Smart_Dube_API {
         $token = str_replace('Bearer ', '', $auth_header);
         $parts = explode('.', $token);
         if (count($parts) === 3) {
-            $payload = json_decode(base64_decode(str_replace(['-', '_'], ['+', '/'], $parts[1])), true);
+            $b64 = str_replace(['-', '_'], ['+', '/'], $parts[1]);
+            $remainder = strlen($b64) % 4;
+            if ($remainder) {
+                $b64 .= str_repeat('=', 4 - $remainder);
+            }
+            $payload = json_decode(base64_decode($b64), true);
             if (!empty($payload['id'])) {
                 $table_users = $wpdb->prefix . 'dube_users';
                 return $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_users WHERE id = %d", $payload['id']), ARRAY_A);
@@ -641,9 +652,36 @@ class Smart_Dube_API {
         global $wpdb;
         $table_merchants = $wpdb->prefix . 'dube_merchants';
         $table_users = $wpdb->prefix . 'dube_users';
+        $table_tx = $wpdb->prefix . 'dube_credit_transactions';
+        $table_rep = $wpdb->prefix . 'dube_repayments';
+        $table_cp = $wpdb->prefix . 'dube_customer_profiles';
 
         $merchants = $wpdb->get_results("SELECT m.*, u.full_name as owner_name, u.phone as owner_phone FROM $table_merchants m JOIN $table_users u ON m.user_id = u.id", ARRAY_A);
-        return new WP_REST_Response(['merchants' => $merchants], 200);
+        
+        $total_dube = $wpdb->get_var("SELECT COALESCE(SUM(total_amount), 0) FROM $table_tx");
+        $total_rep = $wpdb->get_var("SELECT COALESCE(SUM(amount), 0) FROM $table_rep WHERE status = 'COMPLETED'");
+        $active_merchants_count = $wpdb->get_var("SELECT COUNT(*) FROM $table_merchants WHERE kyc_status = 'VERIFIED'");
+        $active_cust_count = $wpdb->get_var("SELECT COUNT(*) FROM $table_cp WHERE status = 'ACTIVE'");
+        
+        $transactions = $wpdb->get_results("SELECT * FROM $table_tx ORDER BY id DESC LIMIT 50", ARRAY_A);
+
+        return new WP_REST_Response([
+            'merchants' => $merchants ?: [],
+            'metrics' => [
+                'totalDubeIssued' => floatval($total_dube),
+                'totalRepayments' => floatval($total_rep),
+                'activeMerchants' => intval($active_merchants_count),
+                'activeCustomers' => intval($active_cust_count)
+            ],
+            'transactions' => $transactions ?: []
+        ], 200);
+    }
+
+    public static function handle_webhook_test($request) {
+        return new WP_REST_Response([
+            'message' => 'Simulated gateway webhook processed successfully',
+            'status' => 'SUCCESS'
+        ], 200);
     }
 
     public static function get_admin_gateways($request) {

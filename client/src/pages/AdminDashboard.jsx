@@ -27,6 +27,7 @@ export const AdminDashboard = () => {
   const [gatewayLogs, setGatewayLogs] = useState([]);
   const { lang } = useTheme();
   const t = (en, am) => (lang === 'EN' ? en : am);
+  const fmt = (val, d = 2) => (parseFloat(val) || 0).toFixed(d);
   const [auditLogs, setAuditLogs] = useState([]);
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState('DASHBOARD'); // DASHBOARD | KYC | GATEWAYS | AUDIT_LOGS
@@ -393,7 +394,7 @@ export const AdminDashboard = () => {
                   <div className="flex justify-between items-start">
                     <div>
                       <p className="text-xs text-slate-400 font-semibold uppercase">{t('Total Dube Volume', 'አጠቃላይ የዱቤ ልውውጥ መጠን')}</p>
-                      <h3 className="text-2xl font-extrabold text-emerald-400 mt-1">{(metrics.totalDubeIssued || 0).toFixed(2)} ETB</h3>
+                      <h3 className="text-2xl font-extrabold text-emerald-400 mt-1">{fmt(metrics.totalDubeIssued)} ETB</h3>
                     </div>
                     <div className="p-2.5 bg-emerald-500/10 text-emerald-400 rounded-xl">
                       <Activity className="w-5 h-5" />
@@ -405,7 +406,7 @@ export const AdminDashboard = () => {
                   <div className="flex justify-between items-start">
                     <div>
                       <p className="text-xs text-slate-400 font-semibold uppercase">{t('Total Repayments', 'አጠቃላይ የተመለሰ ክፍያ')}</p>
-                      <h3 className="text-2xl font-extrabold text-sky-400 mt-1">{(metrics.totalRepayments || 0).toFixed(2)} ETB</h3>
+                      <h3 className="text-2xl font-extrabold text-sky-400 mt-1">{fmt(metrics.totalRepayments)} ETB</h3>
                     </div>
                     <div className="p-2.5 bg-sky-500/10 text-sky-400 rounded-xl">
                       <FileCheck className="w-5 h-5" />

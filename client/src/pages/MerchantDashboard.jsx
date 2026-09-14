@@ -36,6 +36,7 @@ import {
 export const MerchantDashboard = () => {
   const { lang } = useTheme();
   const t = (en, am) => (lang === 'EN' ? en : am);
+  const fmt = (val, decimals = 2) => (parseFloat(val) || 0).toFixed(decimals);
   const [customers, setCustomers] = useState([]);
   const [transactions, setTransactions] = useState([]);
   const [repayments, setRepayments] = useState([]);
@@ -354,9 +355,9 @@ export const MerchantDashboard = () => {
   const getSmsPreview = (customer) => {
     if (customSmsMessage.trim()) return customSmsMessage.trim();
     if (smsType === 'REMINDER')
-      return `[Smart Dube Alert] Dear ${customer.full_name}, your Dube credit repayment of ${customer.current_balance.toFixed(2)} ETB is due. Pay via Telebirr / CBE Birr to maintain your credit limit.`;
+      return `[Smart Dube Alert] Dear ${customer.full_name}, your Dube credit repayment of ${fmt(customer.current_balance)} ETB is due. Pay via Telebirr / CBE Birr to maintain your credit limit.`;
     if (smsType === 'OVERDUE_ALERT')
-      return `[Smart Dube URGENT] ${customer.full_name}, your Dube debt of ${customer.current_balance.toFixed(2)} ETB is OVERDUE! New credit purchases are RESTRICTED. Please settle immediately.`;
+      return `[Smart Dube URGENT] ${customer.full_name}, your Dube debt of ${fmt(customer.current_balance)} ETB is OVERDUE! New credit purchases are RESTRICTED. Please settle immediately.`;
     return '[Smart Dube] Custom notification from your merchant.';
   };
 
@@ -839,7 +840,7 @@ export const MerchantDashboard = () => {
                   <option value="">{t('-- Choose Customer from Ledger --', '-- ከሌጀር ደንበኛ ይምረጡ --')}</option>
                   {customers.map(c => (
                     <option key={c.id} value={c.id}>
-                      {c.full_name} ({c.phone}) • {t('Avail', 'ቀሪ ነጻ ዱቤ')}: {(c.credit_limit - c.current_balance).toFixed(2)} ETB • {t('Status', 'ሁኔታ')}: {c.status}
+                      {c.full_name} ({c.phone}) • {t('Avail', 'ቀሪ ነጻ ዱቤ')}: {fmt(c.credit_limit - c.current_balance)} ETB • {t('Status', 'ሁኔታ')}: {c.status}
                     </option>
                   ))}
                 </select>
@@ -908,7 +909,7 @@ export const MerchantDashboard = () => {
 
                 <div className="text-right flex flex-col justify-center">
                   <span className="text-xs text-slate-400">{t('Total Purchase Amount:', 'ጠቅላላ የግዢ ዋጋ፦')}</span>
-                  <span className="text-xl font-extrabold text-amber-400">{calculateTotal().toFixed(2)} ETB</span>
+                  <span className="text-xl font-extrabold text-amber-400">{fmt(calculateTotal())} ETB</span>
                 </div>
               </div>
 
@@ -930,17 +931,17 @@ export const MerchantDashboard = () => {
             <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
               <div className="glass-card p-5 rounded-2xl border border-slate-800/80">
                 <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider font-mono">{t('Total Outstanding Debt', 'አጠቃላይ ያልተከፈለ ብድር')}</p>
-                <p className="text-xl font-black text-amber-400 mt-1">{totalOutstanding.toFixed(2)} ETB</p>
+                <p className="text-xl font-black text-amber-400 mt-1">{fmt(totalOutstanding)} ETB</p>
                 <p className="text-[10px] text-slate-400 mt-1">{t('Dube credit currently in use by customers', 'በደንበኞች ጥቅም ላይ የዋለ የዱቤ ብድር')}</p>
               </div>
               <div className="glass-card p-5 rounded-2xl border border-slate-800/80">
                 <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider font-mono">{t('Total Credit Approved', 'አጠቃላይ የተፈቀደ ብድር')}</p>
-                <p className="text-xl font-black text-sky-400 mt-1">{totalLimit.toFixed(2)} ETB</p>
+                <p className="text-xl font-black text-sky-400 mt-1">{fmt(totalLimit)} ETB</p>
                 <p className="text-[10px] text-slate-400 mt-1">{t('Max combined limit authorized for customers', 'ለደንበኞች የተፈቀደ ከፍተኛ የዱቤ መጠን')}</p>
               </div>
               <div className="glass-card p-5 rounded-2xl border border-slate-800/80">
                 <p className="text-[10px] font-bold text-slate-500 uppercase tracking-wider font-mono">{t('Available Credit Pool', 'ያልተያዘ ነፃ የዱቤ መጠን')}</p>
-                <p className="text-xl font-black text-emerald-400 mt-1">{(totalLimit - totalOutstanding).toFixed(2)} ETB</p>
+                <p className="text-xl font-black text-emerald-400 mt-1">{fmt(totalLimit - totalOutstanding)} ETB</p>
               </div>
             </div>
 
@@ -1080,21 +1081,21 @@ export const MerchantDashboard = () => {
                         <span className="w-2 h-2 rounded-full bg-[#10b981]"></span>
                         {t('Available Pool:', 'ያልተያዘ ቀሪ ድምር፦')}
                       </span>
-                      <span className="font-bold text-emerald-400">{(totalLimit - totalOutstanding).toFixed(0)} ETB</span>
+                      <span className="font-bold text-emerald-400">{fmt(totalLimit - totalOutstanding, 0)} ETB</span>
                     </div>
                     <div className="flex justify-between items-center border-b border-slate-800/60 pb-1">
                       <span className="flex items-center gap-1.5 text-slate-400">
                         <span className="w-2 h-2 rounded-full bg-[#f59e0b]"></span>
                         {t('Utilized Credit:', 'ጥቅም ላይ የዋለ ዱቤ፦')}
                       </span>
-                      <span className="font-bold text-amber-500">{totalOutstanding.toFixed(0)} ETB</span>
+                      <span className="font-bold text-amber-500">{fmt(totalOutstanding, 0)} ETB</span>
                     </div>
                     <div className="flex justify-between items-center">
                       <span className="flex items-center gap-1.5 text-slate-400">
                         <span className="w-2 h-2 rounded-full bg-slate-700"></span>
                         {t('Approved Limit:', 'የተፈቀደ ወሰን፦')}
                       </span>
-                      <span className="font-bold text-slate-300">{totalLimit.toFixed(0)} ETB</span>
+                      <span className="font-bold text-slate-300">{fmt(totalLimit, 0)} ETB</span>
                     </div>
                   </div>
                 </div>
@@ -1219,11 +1220,11 @@ export const MerchantDashboard = () => {
                   <div className="space-y-1.5 mb-4">
                     <div className="flex justify-between text-xs">
                       <span className="text-slate-400">{t('Current Balance:', 'የአሁኑ ቀሪ ሂሳብ፦')}</span>
-                      <span className="font-bold text-amber-400">{customer.current_balance.toFixed(2)} ETB</span>
+                      <span className="font-bold text-amber-400">{fmt(customer.current_balance)} ETB</span>
                     </div>
                     <div className="flex justify-between text-[11px]">
                       <span className="text-slate-500">{t('Max Limit:', 'ከፍተኛ ወሰን፦')}</span>
-                      <span className="text-slate-300 font-semibold">{customer.credit_limit.toFixed(2)} ETB</span>
+                      <span className="text-slate-300 font-semibold">{fmt(customer.credit_limit)} ETB</span>
                     </div>
 
                     <div className="w-full h-2 bg-slate-900 rounded-full overflow-hidden border border-slate-800">
@@ -1339,7 +1340,7 @@ export const MerchantDashboard = () => {
                     <td className="py-3.5 font-mono text-emerald-400 font-bold">{tx.transaction_ref}</td>
                     <td className="py-3.5 font-semibold text-slate-100">{tx.customer_name}</td>
                     <td className="py-3.5 font-mono text-slate-400">{tx.customer_phone}</td>
-                    <td className="py-3.5 font-bold text-amber-400">{tx.total_amount.toFixed(2)} ETB</td>
+                    <td className="py-3.5 font-bold text-amber-400">{fmt(tx.total_amount)} ETB</td>
                     <td className="py-3.5 font-mono text-slate-300">{tx.due_date ? String(tx.due_date).split('T')[0] : 'N/A'}</td>
                     <td className="py-3.5">
                       <span
@@ -1411,7 +1412,7 @@ export const MerchantDashboard = () => {
                   <div className="grid grid-cols-2 gap-2 text-xs font-mono bg-slate-950 p-2.5 rounded-xl border border-slate-800">
                     <div>
                       <span className="text-slate-500 text-[10px] block">{t('Amount Paid:', 'የተከፈለ መጠን፦')}</span>
-                      <span className="text-emerald-400 font-bold text-sm">{r.amount.toFixed(2)} ETB</span>
+                      <span className="text-emerald-400 font-bold text-sm">{fmt(r.amount)} ETB</span>
                     </div>
                     <div>
                       <span className="text-slate-500 text-[10px] block">{t('Ref Code / TXN:', 'ማጣቀሻ ኮድ፦')}</span>
@@ -1568,7 +1569,7 @@ export const MerchantDashboard = () => {
                     </div>
                     <div className="ml-auto text-right">
                       <p className="text-[10px] text-slate-500">Balance</p>
-                      <p className="text-xs font-bold text-amber-400">{smsTarget.current_balance.toFixed(2)} ETB</p>
+                      <p className="text-xs font-bold text-amber-400">{fmt(smsTarget.current_balance)} ETB</p>
                     </div>
                   </div>
 
@@ -1734,18 +1735,18 @@ export const MerchantDashboard = () => {
             <div className="grid grid-cols-3 gap-3">
               <div className="bg-slate-900/90 p-3.5 rounded-xl border border-slate-800 text-center">
                 <p className="text-[10px] uppercase font-mono text-slate-500 font-bold">Current Dube Debt</p>
-                <p className="text-lg font-extrabold text-amber-400 mt-0.5">{itemsModalCustomer.current_balance.toFixed(2)} ETB</p>
+                <p className="text-lg font-extrabold text-amber-400 mt-0.5">{fmt(itemsModalCustomer.current_balance)} ETB</p>
               </div>
 
               <div className="bg-slate-900/90 p-3.5 rounded-xl border border-slate-800 text-center">
                 <p className="text-[10px] uppercase font-mono text-slate-500 font-bold">Approved Credit Limit</p>
-                <p className="text-lg font-extrabold text-sky-400 mt-0.5">{itemsModalCustomer.credit_limit.toFixed(2)} ETB</p>
+                <p className="text-lg font-extrabold text-sky-400 mt-0.5">{fmt(itemsModalCustomer.credit_limit)} ETB</p>
               </div>
 
               <div className="bg-slate-900/90 p-3.5 rounded-xl border border-slate-800 text-center">
                 <p className="text-[10px] uppercase font-mono text-slate-500 font-bold">Available Remaining</p>
                 <p className="text-lg font-extrabold text-emerald-400 mt-0.5">
-                  {Math.max(0, itemsModalCustomer.credit_limit - itemsModalCustomer.current_balance).toFixed(2)} ETB
+                  {fmt(Math.max(0, (parseFloat(itemsModalCustomer.credit_limit) || 0) - (parseFloat(itemsModalCustomer.current_balance) || 0)))} ETB
                 </p>
               </div>
             </div>
@@ -1788,7 +1789,7 @@ export const MerchantDashboard = () => {
                             }`}>
                               {tx.status}
                             </span>
-                            <span className="font-bold text-amber-400 text-sm">{tx.total_amount.toFixed(2)} ETB</span>
+                            <span className="font-bold text-amber-400 text-sm">{fmt(tx.total_amount)} ETB</span>
                           </div>
                         </div>
 
@@ -1809,10 +1810,10 @@ export const MerchantDashboard = () => {
                                   <td className="py-1.5 font-medium text-slate-200">{item.name}</td>
                                   <td className="py-1.5 text-center font-mono text-slate-400">{item.quantity}x</td>
                                   <td className="py-1.5 text-right font-mono text-slate-400">
-                                    {item.unitPrice ? parseFloat(item.unitPrice).toFixed(2) : '-'} ETB
+                                    {item.unitPrice ? fmt(item.unitPrice) : '-'} ETB
                                   </td>
                                   <td className="py-1.5 text-right font-mono font-bold text-emerald-400">
-                                    {(item.total || (item.quantity * (item.unitPrice || 0))).toFixed(2)} ETB
+                                    {fmt(item.total || (item.quantity * (item.unitPrice || 0)))} ETB
                                   </td>
                                 </tr>
                               ))}
