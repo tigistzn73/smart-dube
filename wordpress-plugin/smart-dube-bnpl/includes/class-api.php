@@ -536,7 +536,50 @@ class Smart_Dube_API {
             $user ? $user['phone'] : ''
         ), ARRAY_A);
 
-        $transactions = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table_tx WHERE customer_id IN (SELECT id FROM $table_cp WHERE user_id = %d)", $user_id), ARRAY_A);
+        $transactions = $wpdb->get_results($wpdb->prepare(
+            "SELECT tx.*, m.store_name 
+             FROM $table_tx tx 
+             LEFT JOIN $table_merchants m ON tx.merchant_id = m.id 
+             WHERE tx.customer_id IN (SELECT id FROM $table_cp WHERE user_id = %d OR phone = %s)
+             ORDER BY tx.id DESC", 
+            $user_id,
+            $user ? $user['phone'] : ''
+        ), ARRAY_A);
+
+        if (!empty($transactions)) {
+            foreach ($transactions as &$tx) {
+                if (!empty($tx['items_json'])) {
+                    $decoded = json_decode($tx['items_json'], true);
+                    $tx['items'] = is_array($decoded) ? $decoded : [];
+                } else {
+                    $tx['items'] = [];
+                }
+                $tx['total_amount'] = floatval($tx['total_amount'] ?? 0);
+            }
+            unset($tx);
+        } else {
+            $transactions = [];
+        }
+
+        $repayments = $wpdb->get_results($wpdb->prepare(
+            "SELECT rep.*, m.store_name 
+             FROM $table_rep rep 
+             LEFT JOIN $table_merchants m ON rep.merchant_id = m.id 
+             WHERE rep.customer_id IN (SELECT id FROM $table_cp WHERE user_id = %d OR phone = %s)
+             ORDER BY rep.id DESC", 
+            $user_id,
+            $user ? $user['phone'] : ''
+        ), ARRAY_A);
+
+        if (!empty($repayments)) {
+            foreach ($repayments as &$r) {
+                $r['amount'] = floatval($r['amount'] ?? 0);
+            }
+            unset($r);
+        } else {
+            $repayments = [];
+        }
+
         $total_limit = 0;
         $total_balance = 0;
         if (!empty($profiles)) {
@@ -555,8 +598,8 @@ class Smart_Dube_API {
                 'availableCredit' => $available_credit,
                 'activeAccountsCount' => is_array($profiles) ? count($profiles) : 0
             ],
-            'transactions' => $transactions ? $transactions : [],
-            'repayments' => $repayments ? $repayments : []
+            'transactions' => $transactions,
+            'repayments' => $repayments
         ], 200);
     }
 

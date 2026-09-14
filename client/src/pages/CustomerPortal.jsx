@@ -26,6 +26,7 @@ export const CustomerPortal = () => {
   const [loading, setLoading] = useState(true);
   const { lang } = useTheme();
   const t = (en, am) => (lang === 'EN' ? en : am);
+  const fmt = (val, decimals = 2) => (parseFloat(val) || 0).toFixed(decimals);
   const [selectedTxForPayment, setSelectedTxForPayment] = useState(null);
   const [selectedReceipt, setSelectedReceipt] = useState(null);
   const [activeTab, setActiveTab] = useState('DASHBOARD');
@@ -592,153 +593,155 @@ export const CustomerPortal = () => {
           {activeTab === 'TRANSACTIONS' && (
             <div className="space-y-6">
               {/* Salary Cycle Repayment Scheduler Trigger & Active Plan Card */}
-              <div className="glass-panel p-6 rounded-2xl border border-slate-800 flex flex-col justify-between">
-                <div>
-                  <div className="flex items-center justify-between">
-                    <h4 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-                      <Calendar className="w-4 h-4 text-sky-400" />
-                      {t('Salary Repayment Schedule', 'የደመወዝ ክፍያ የጊዜ ሰሌዳ')}
-                    </h4>
-                    {data?.activeSchedule && summary.totalBalance > 0 && data.activeSchedule.installments?.some(i => i.status !== 'PAID') && (
-                      <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
-                        {t('ACTIVE PLAN', 'ገባሪ እቅድ')}
-                      </span>
+              {profiles.length > 0 && (
+                <div className="glass-panel p-6 rounded-2xl border border-slate-800 flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between">
+                      <h4 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                        <Calendar className="w-4 h-4 text-sky-400" />
+                        {t('Salary Repayment Schedule', 'የደመወዝ ክፍያ የጊዜ ሰሌዳ')}
+                      </h4>
+                      {data?.activeSchedule && summary.totalBalance > 0 && data.activeSchedule.installments?.some(i => i.status !== 'PAID') && (
+                        <span className="px-2 py-0.5 rounded-full text-[10px] font-extrabold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                          {t('ACTIVE PLAN', 'ገባሪ እቅድ')}
+                        </span>
+                      )}
+                    </div>
+                    <p className="text-xs text-slate-400 mt-1">
+                      {t('Split Dube balances into weekly or monthly salary installments per store', 'የዱቤ እዳዎችን ለእያንዳንዱ ሱቅ ወደ ሳምንታዊ ወይም ወርሃዊ የደመወዝ ክፍሎች ይከፋፍሉ')}
+                    </p>
+
+                    {/* Store Schedule Switcher Tabs */}
+                    {profiles.length > 1 && (
+                      <div className="flex items-center gap-1.5 overflow-x-auto pb-1 mt-3">
+                        {profiles.map(p => {
+                          const isSelected = (selectedScheduleViewMerchant === String(p.merchant_id)) ||
+                            (!selectedScheduleViewMerchant || selectedScheduleViewMerchant === 'ALL' ? p.id === profiles[0].id : false);
+
+                          return (
+                            <button
+                              key={p.id}
+                              onClick={() => {
+                                setSelectedScheduleViewMerchant(String(p.merchant_id));
+                                setSelectedScheduleMerchant(String(p.merchant_id));
+                              }}
+                              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
+                                isSelected
+                                  ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20 ring-1 ring-emerald-400'
+                                  : 'bg-slate-900/90 text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-800'
+                              }`}
+                            >
+                              <Store className="w-3.5 h-3.5" />
+                              <span>{p.store_name}</span>
+                              {parseFloat(p.current_balance || 0) > 0 && (
+                                <span className="text-[10px] px-1.5 py-0.2 rounded bg-black/30 font-mono text-amber-300">
+                                  {fmt(p.current_balance, 0)} ETB
+                                </span>
+                              )}
+                            </button>
+                          );
+                        })}
+                      </div>
                     )}
                   </div>
-                  <p className="text-xs text-slate-400 mt-1">
-                    {t('Split Dube balances into weekly or monthly salary installments per store', 'የዱቤ እዳዎችን ለእያንዳንዱ ሱቅ ወደ ሳምንታዊ ወይም ወርሃዊ የደመወዝ ክፍሎች ይከፋፍሉ')}
-                  </p>
 
-                  {/* Store Schedule Switcher Tabs */}
-                  {profiles.length > 1 && (
-                    <div className="flex items-center gap-1.5 overflow-x-auto pb-1 mt-3">
-                      {profiles.map(p => {
-                        const isSelected = (selectedScheduleViewMerchant === String(p.merchant_id)) ||
-                          (!selectedScheduleViewMerchant || selectedScheduleViewMerchant === 'ALL' ? p.id === profiles[0].id : false);
+                  {/* Resolve current active schedule for the chosen store */}
+                  {(() => {
+                    const allActiveSchedules = data?.activeSchedules || (data?.activeSchedule ? [data.activeSchedule] : []);
+                    const activeMerchantId = (selectedScheduleViewMerchant && selectedScheduleViewMerchant !== 'ALL')
+                      ? selectedScheduleViewMerchant
+                      : (profiles[0] ? String(profiles[0].merchant_id) : '');
 
-                        return (
-                          <button
-                            key={p.id}
-                            onClick={() => {
-                              setSelectedScheduleViewMerchant(String(p.merchant_id));
-                              setSelectedScheduleMerchant(String(p.merchant_id));
-                            }}
-                            className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shrink-0 ${
-                              isSelected
-                                ? 'bg-emerald-600 text-white shadow-md shadow-emerald-600/20 ring-1 ring-emerald-400'
-                                : 'bg-slate-900/90 text-slate-300 hover:text-white hover:bg-slate-800 border border-slate-800'
-                            }`}
-                          >
-                            <Store className="w-3.5 h-3.5" />
-                            <span>{p.store_name}</span>
-                            {p.current_balance > 0 && (
-                              <span className="text-[10px] px-1.5 py-0.2 rounded bg-black/30 font-mono text-amber-300">
-                                {p.current_balance.toFixed(0)} ETB
-                              </span>
-                            )}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  )}
-                </div>
+                    const profileForStore = profiles.find(p => String(p.merchant_id) === activeMerchantId) || profiles[0];
+                    const currentViewSchedule = allActiveSchedules.find(s =>
+                      (profileForStore && String(s.merchant_id) === String(profileForStore.merchant_id)) ||
+                      (profileForStore && s.customer_id === profileForStore.id)
+                    );
 
-                {/* Resolve current active schedule for the chosen store */}
-                {(() => {
-                  const allActiveSchedules = data?.activeSchedules || (data?.activeSchedule ? [data.activeSchedule] : []);
-                  const activeMerchantId = (selectedScheduleViewMerchant && selectedScheduleViewMerchant !== 'ALL')
-                    ? selectedScheduleViewMerchant
-                    : (profiles[0] ? String(profiles[0].merchant_id) : '');
+                    const hasUnpaidInsts = currentViewSchedule && currentViewSchedule.installments?.some(i => i.status !== 'PAID');
 
-                  const profileForStore = profiles.find(p => String(p.merchant_id) === activeMerchantId) || profiles[0];
-                  const currentViewSchedule = allActiveSchedules.find(s =>
-                    (profileForStore && String(s.merchant_id) === String(profileForStore.merchant_id)) ||
-                    (profileForStore && s.customer_id === profileForStore.id)
-                  );
-
-                  const hasUnpaidInsts = currentViewSchedule && currentViewSchedule.installments?.some(i => i.status !== 'PAID');
-
-                  if (currentViewSchedule && hasUnpaidInsts) {
-                    return (
-                      <div className="mt-3 space-y-2 bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
-                        <div className="text-[11px] font-bold text-sky-400 flex justify-between items-center">
-                          <span>
-                            {t('Active Plan for', 'ለ')} {profileForStore?.store_name || currentViewSchedule.store_name}:
-                          </span>
-                          <span className="text-[10px] text-slate-400 font-mono">
-                            {currentViewSchedule.installments.filter(i => i.status === 'PAID').length} / {currentViewSchedule.installments.length} {t('Paid', 'ተከፍሏል')}
-                          </span>
-                        </div>
-                        {currentViewSchedule.installments.map(inst => (
-                          <div key={inst.installmentNo} className="flex justify-between items-center text-xs py-1.5 border-b border-slate-800/60 font-mono">
-                            <div>
-                              <span className="text-slate-200">{t('Inst', 'ክፍል')} #{inst.installmentNo} ({t('Due', 'ቀን')}: {inst.dueDate})</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-amber-400 font-bold">{inst.amount.toFixed(2)} ETB</span>
-                              {inst.status === 'PAID' ? (
-                                <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 font-bold">{t('PAID', 'ተከፍሏል')}</span>
-                              ) : (
-                                <button
-                                  onClick={() => {
-                                    const targetTx = transactions.find(t => t.customer_id === profileForStore?.id && t.status !== 'SETTLED')
-                                      || transactions.find(t => t.merchant_id === profileForStore?.merchant_id && t.status !== 'SETTLED')
-                                      || transactions.find(t => t.status !== 'SETTLED')
-                                      || transactions[0];
-                                    if (targetTx) {
-                                      setSelectedTxForPayment({
-                                        ...targetTx,
-                                        store_name: profileForStore ? profileForStore.store_name : targetTx.store_name,
-                                        merchant_id: profileForStore ? profileForStore.merchant_id : targetTx.merchant_id,
-                                        customer_id: profileForStore ? profileForStore.id : targetTx.customer_id,
-                                        total_amount: inst.amount,
-                                        installmentNo: inst.installmentNo
-                                      });
-                                    }
-                                  }}
-                                  className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold cursor-pointer transition-all"
-                                >
-                                  {t('Pay', 'ክፈል')}
-                                </button>
-                              )}
-                            </div>
+                    if (currentViewSchedule && hasUnpaidInsts) {
+                      return (
+                        <div className="mt-3 space-y-2 bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
+                          <div className="text-[11px] font-bold text-sky-400 flex justify-between items-center">
+                            <span>
+                              {t('Active Plan for', 'ለ')} {profileForStore?.store_name || currentViewSchedule.store_name}:
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              {currentViewSchedule.installments.filter(i => i.status === 'PAID').length} / {currentViewSchedule.installments.length} {t('Paid', 'ተከፍሏል')}
+                            </span>
                           </div>
-                        ))}
+                          {currentViewSchedule.installments.map(inst => (
+                            <div key={inst.installmentNo} className="flex justify-between items-center text-xs py-1.5 border-b border-slate-800/60 font-mono">
+                              <div>
+                                <span className="text-slate-200">{t('Inst', 'ክፍል')} #{inst.installmentNo} ({t('Due', 'ቀን')}: {inst.dueDate})</span>
+                              </div>
+                              <div className="flex items-center gap-2">
+                                <span className="text-amber-400 font-bold">{fmt(inst.amount)} ETB</span>
+                                {inst.status === 'PAID' ? (
+                                  <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 font-bold">{t('PAID', 'ተከፍሏል')}</span>
+                                ) : (
+                                  <button
+                                    onClick={() => {
+                                      const targetTx = transactions.find(t => t.customer_id === profileForStore?.id && t.status !== 'SETTLED')
+                                        || transactions.find(t => t.merchant_id === profileForStore?.merchant_id && t.status !== 'SETTLED')
+                                        || transactions.find(t => t.status !== 'SETTLED')
+                                        || transactions[0];
+                                      if (targetTx) {
+                                        setSelectedTxForPayment({
+                                          ...targetTx,
+                                          store_name: profileForStore ? profileForStore.store_name : targetTx.store_name,
+                                          merchant_id: profileForStore ? profileForStore.merchant_id : targetTx.merchant_id,
+                                          customer_id: profileForStore ? profileForStore.id : targetTx.customer_id,
+                                          total_amount: inst.amount,
+                                          installmentNo: inst.installmentNo
+                                        });
+                                      }
+                                    }}
+                                    className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold cursor-pointer transition-all"
+                                  >
+                                    {t('Pay', 'ክፈል')}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                          <button
+                            onClick={() => {
+                              setSelectedScheduleMerchant(String(profileForStore?.merchant_id || ''));
+                              openScheduleModal();
+                            }}
+                            className="w-full mt-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-semibold transition-colors cursor-pointer"
+                          >
+                            {t('Change / Customize Schedule', 'የጊዜ ሰሌዳውን ቀይር / አስተካክል')}
+                          </button>
+                        </div>
+                      );
+                    }
+
+                    // No schedule for this specific selected store yet
+                    return (
+                      <div className="mt-4 p-4 rounded-xl bg-slate-900/80 border border-slate-800/80 text-center space-y-2.5">
+                        <p className="text-xs text-slate-300 font-medium">
+                          {t('No repayment schedule set up for', 'ለ')} {profileForStore?.store_name || 'this store'} {t('yet', 'አልተዘጋጀም')} (Debt: {fmt(profileForStore?.current_balance)} ETB).
+                        </p>
                         <button
                           onClick={() => {
                             setSelectedScheduleMerchant(String(profileForStore?.merchant_id || ''));
                             openScheduleModal();
                           }}
-                          className="w-full mt-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-semibold transition-colors cursor-pointer"
+                          className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold shadow-lg shadow-sky-600/20 inline-flex items-center gap-1.5 cursor-pointer transition-all"
                         >
-                          {t('Change / Customize Schedule', 'የጊዜ ሰሌዳውን ቀይር / አስተካክል')}
+                          <Clock className="w-4 h-4" />
+                          <span>
+                            {t('Create Schedule for', 'ለ')} {profileForStore?.store_name || 'Store'}
+                          </span>
                         </button>
                       </div>
                     );
-                  }
-
-                  // No schedule for this specific selected store yet
-                  return (
-                    <div className="mt-4 p-4 rounded-xl bg-slate-900/80 border border-slate-800/80 text-center space-y-2.5">
-                      <p className="text-xs text-slate-300 font-medium">
-                        {t('No repayment schedule set up for', 'ለ')} {profileForStore?.store_name || 'this store'} {t('yet', 'አልተዘጋጀም')} (Debt: {profileForStore?.current_balance?.toFixed(2) || '0.00'} ETB).
-                      </p>
-                      <button
-                        onClick={() => {
-                          setSelectedScheduleMerchant(String(profileForStore?.merchant_id || ''));
-                          openScheduleModal();
-                        }}
-                        className="px-4 py-2 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold shadow-lg shadow-sky-600/20 inline-flex items-center gap-1.5 cursor-pointer transition-all"
-                      >
-                        <Clock className="w-4 h-4" />
-                        <span>
-                          {t('Create Schedule for', 'ለ')} {profileForStore?.store_name || 'Store'}
-                        </span>
-                      </button>
-                    </div>
-                  );
-                })()}
-              </div>
+                  })()}
+                </div>
+              )}
 
               {/* Itemized Dube Receipts */}
               <div className="glass-panel p-6 rounded-2xl border border-slate-800">
@@ -754,57 +757,60 @@ export const CustomerPortal = () => {
                   <div className="text-center py-8 text-slate-500 text-xs">{t('No pending credit ledger items found.', 'ምንም ያልተከፈለ የዱቤ ቀሪ ሂሳብ አልተገኘም።')}</div>
                 ) : (
                   <div className="space-y-3">
-                    {pendingTransactions.map(tx => (
-                      <div
-                        key={tx.id}
-                        className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-4"
-                      >
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono text-xs font-bold text-emerald-400">{tx.transaction_ref}</span>
-                            <span className="text-slate-400 text-xs">•</span>
-                            <span className="font-semibold text-slate-200 text-xs">{tx.store_name}</span>
-                            <span
-                              className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
-                                tx.status === 'SETTLED'
-                                  ? 'bg-emerald-500/20 text-emerald-400'
-                                  : tx.status === 'OVERDUE'
-                                  ? 'bg-red-500/20 text-red-400'
-                                  : 'bg-amber-500/20 text-amber-400'
-                              }`}
-                            >
-                              {tx.status === 'SETTLED' ? t('SETTLED', 'የተከፈለ') : tx.status === 'OVERDUE' ? t('OVERDUE', 'ቀን ያለፈበት') : t('PENDING', 'ያልተከፈለ')}
-                            </span>
-                          </div>
-
-                          {/* Line items preview */}
-                          <div className="text-xs text-slate-400 flex flex-wrap gap-2 pt-1">
-                            {tx.items && tx.items.map((item, i) => (
-                              <span key={i} className="bg-slate-800 px-2 py-0.5 rounded text-[11px] text-slate-300">
-                                {item.quantity}x {item.name} ({item.total ? item.total.toFixed(2) : ''} ETB)
+                    {pendingTransactions.map(tx => {
+                      const rawItems = tx.items || (typeof tx.items_json === 'string' ? (() => { try { return JSON.parse(tx.items_json); } catch { return []; } })() : []);
+                      return (
+                        <div
+                          key={tx.id}
+                          className="bg-slate-900/70 p-4 rounded-xl border border-slate-800 flex flex-col md:flex-row justify-between items-start md:items-center gap-4"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-xs font-bold text-emerald-400">{tx.transaction_ref}</span>
+                              <span className="text-slate-400 text-xs">•</span>
+                              <span className="font-semibold text-slate-200 text-xs">{tx.store_name}</span>
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                                  tx.status === 'SETTLED'
+                                    ? 'bg-emerald-500/20 text-emerald-400'
+                                    : tx.status === 'OVERDUE'
+                                    ? 'bg-red-500/20 text-red-400'
+                                    : 'bg-amber-500/20 text-amber-400'
+                                }`}
+                              >
+                                {tx.status === 'SETTLED' ? t('SETTLED', 'የተከፈለ') : tx.status === 'OVERDUE' ? t('OVERDUE', 'ቀን ያለፈበት') : t('PENDING', 'ያልተከፈለ')}
                               </span>
-                            ))}
+                            </div>
+
+                            {/* Line items preview */}
+                            <div className="text-xs text-slate-400 flex flex-wrap gap-2 pt-1">
+                              {Array.isArray(rawItems) && rawItems.map((item, i) => (
+                                <span key={i} className="bg-slate-800 px-2 py-0.5 rounded text-[11px] text-slate-300">
+                                  {item.quantity}x {item.name} ({item.total ? fmt(item.total) : ''} ETB)
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+
+                          <div className="flex items-center gap-4 self-end md:self-auto">
+                            <div className="text-right">
+                              <p className="text-xs text-slate-500">{t('Due Date:', 'የመክፈያ ቀን፦')} {tx.due_date ? String(tx.due_date).split('T')[0] : 'N/A'}</p>
+                              <p className="font-extrabold text-amber-400 text-base">{fmt(tx.total_amount)} ETB</p>
+                            </div>
+
+                            {tx.status !== 'SETTLED' && (
+                              <button
+                                onClick={() => setSelectedTxForPayment(tx)}
+                                className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 flex items-center gap-1.5 transition-all cursor-pointer"
+                              >
+                                <CreditCard className="w-3.5 h-3.5" />
+                                <span>{t('Pay Debt', 'ዕዳ ክፈል')}</span>
+                              </button>
+                            )}
                           </div>
                         </div>
-
-                        <div className="flex items-center gap-4 self-end md:self-auto">
-                          <div className="text-right">
-                            <p className="text-xs text-slate-500">{t('Due Date:', 'የመክፈያ ቀን፦')} {tx.due_date ? String(tx.due_date).split('T')[0] : 'N/A'}</p>
-                            <p className="font-extrabold text-amber-400 text-base">{tx.total_amount.toFixed(2)} ETB</p>
-                          </div>
-
-                          {tx.status !== 'SETTLED' && (
-                            <button
-                              onClick={() => setSelectedTxForPayment(tx)}
-                              className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 flex items-center gap-1.5 transition-all cursor-pointer"
-                            >
-                              <CreditCard className="w-3.5 h-3.5" />
-                              <span>{t('Pay Debt', 'ዕዳ ክፈል')}</span>
-                            </button>
-                          )}
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -839,7 +845,7 @@ export const CustomerPortal = () => {
                         <td className="py-2.5">{r.store_name}</td>
                         <td className="py-2.5 font-semibold text-emerald-400">{r.payment_gateway}</td>
                         <td className="py-2.5 font-mono text-yellow-400">{r.reference_code}</td>
-                        <td className="py-2.5 font-bold text-slate-100">{r.amount.toFixed(2)} ETB</td>
+                        <td className="py-2.5 font-bold text-slate-100">{fmt(r.amount)} ETB</td>
                         <td className="py-2.5">
                           <span className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
                             r.status === 'COMPLETED'
@@ -962,7 +968,7 @@ export const CustomerPortal = () => {
                         <span className="text-[10px] text-slate-400 font-sans">({storeLabel})</span>
                       </div>
                       <div className="bg-slate-900 px-3 py-2.5 rounded-xl border border-slate-800 text-sm font-extrabold text-amber-400">
-                        {displayBalance.toFixed(2)} ETB
+                        {fmt(displayBalance)} ETB
                       </div>
                     </div>
 
@@ -1040,7 +1046,7 @@ export const CustomerPortal = () => {
                           </span>
                           <span className="text-slate-200">Due Date: {inst.dueDate}</span>
                         </div>
-                        <span className="text-amber-400 font-bold">{inst.amount.toFixed(2)} ETB</span>
+                        <span className="text-amber-400 font-bold">{fmt(inst.amount)} ETB</span>
                       </div>
                     ))}
                   </div>
