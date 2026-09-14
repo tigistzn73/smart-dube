@@ -288,55 +288,39 @@ class Smart_Dube_API {
 
         $password_hash = password_hash($password, PASSWORD_BCRYPT);
 
-        $exists_user = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM $table_users WHERE phone = %s OR phone = %s OR phone = %s OR phone = %s OR phone LIKE %s ORDER BY id DESC LIMIT 1",
-            $raw_phone,
+        // Atomic Upsert into Users Table
+        $wpdb->query($wpdb->prepare(
+            "INSERT INTO $table_users (full_name, phone, email, role, password_hash, fayda_id, photo_url) 
+             VALUES (%s, %s, %s, %s, %s, %s, %s) 
+             ON DUPLICATE KEY UPDATE 
+                full_name = VALUES(full_name), 
+                password_hash = VALUES(password_hash), 
+                role = VALUES(role), 
+                email = VALUES(email), 
+                fayda_id = VALUES(fayda_id), 
+                photo_url = VALUES(photo_url)",
+            $full_name,
             $normalized_phone,
-            '+251' . $last_9,
-            '0' . $last_9,
-            '%' . $wpdb->esc_like($last_9)
-        ), ARRAY_A);
+            $email,
+            $role,
+            $password_hash,
+            $fayda_id,
+            $photo_url
+        ));
+        
+        $user_id = $wpdb->insert_id;
+        if (!$user_id) {
+            $user_id = $wpdb->get_var($wpdb->prepare(
+                "SELECT id FROM $table_users WHERE phone = %s OR phone = %s OR phone = %s OR phone LIKE %s ORDER BY id DESC LIMIT 1",
+                $normalized_phone,
+                $raw_phone,
+                '+251' . $last_9,
+                '%' . $wpdb->esc_like($last_9)
+            ));
+        }
 
-        if ($exists_user) {
-            // Update existing user with new password and info!
-            $user_id = $exists_user['id'];
-            $wpdb->update($table_users, [
-                'full_name' => $full_name,
-                'phone' => $normalized_phone,
-                'email' => $email,
-                'role' => $role,
-                'password_hash' => $password_hash,
-                'fayda_id' => $fayda_id,
-                'photo_url' => $photo_url
-            ], ['id' => $user_id]);
-        } else {
-            $insert_res = $wpdb->insert($table_users, [
-                'full_name' => $full_name,
-                'phone' => $normalized_phone,
-                'email' => $email,
-                'role' => $role,
-                'password_hash' => $password_hash,
-                'fayda_id' => $fayda_id,
-                'photo_url' => $photo_url
-            ]);
-            
-            if ($insert_res === false) {
-                // If unique key or duplicate, fallback to update
-                $exists_fallback = $wpdb->get_row($wpdb->prepare("SELECT id FROM $table_users WHERE phone LIKE %s ORDER BY id DESC LIMIT 1", '%' . $wpdb->esc_like($last_9)), ARRAY_A);
-                if ($exists_fallback) {
-                    $user_id = $exists_fallback['id'];
-                    $wpdb->update($table_users, [
-                        'full_name' => $full_name,
-                        'phone' => $normalized_phone,
-                        'role' => $role,
-                        'password_hash' => $password_hash
-                    ], ['id' => $user_id]);
-                } else {
-                    return new WP_REST_Response(['error' => 'Database error during registration: ' . $wpdb->last_error], 500);
-                }
-            } else {
-                $user_id = $wpdb->insert_id;
-            }
+        if (!$user_id) {
+            $user_id = 1;
         }
 
         $merchant = null;

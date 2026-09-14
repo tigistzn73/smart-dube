@@ -27,11 +27,9 @@ class Smart_Dube_Database {
         global $wpdb;
         $charset_collate = $wpdb->get_charset_collate();
 
-        require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
-
         // 1. Users table
         $table_users = $wpdb->prefix . 'dube_users';
-        $sql_users = "CREATE TABLE $table_users (
+        $wpdb->query("CREATE TABLE IF NOT EXISTS $table_users (
             id bigint(20) NOT NULL AUTO_INCREMENT,
             full_name varchar(200) NOT NULL,
             phone varchar(20) NOT NULL,
@@ -43,15 +41,14 @@ class Smart_Dube_Database {
             reset_token varchar(10) DEFAULT NULL,
             reset_token_expires datetime DEFAULT NULL,
             created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
-            PRIMARY KEY  (id),
+            PRIMARY KEY (id),
             UNIQUE KEY phone (phone)
-        ) $charset_collate;";
-        dbDelta($sql_users);
+        ) $charset_collate;");
         @$wpdb->query("ALTER TABLE $table_users MODIFY password_hash VARCHAR(255) NOT NULL");
 
         // 2. Merchants table
         $table_merchants = $wpdb->prefix . 'dube_merchants';
-        $sql_merchants = "CREATE TABLE $table_merchants (
+        $wpdb->query("CREATE TABLE IF NOT EXISTS $table_merchants (
             id bigint(20) NOT NULL AUTO_INCREMENT,
             user_id bigint(20) NOT NULL,
             store_name varchar(200) NOT NULL,
@@ -61,14 +58,13 @@ class Smart_Dube_Database {
             verified_at datetime DEFAULT NULL,
             kyc_notes text DEFAULT NULL,
             created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
-            PRIMARY KEY  (id),
+            PRIMARY KEY (id),
             KEY user_id (user_id)
-        ) $charset_collate;";
-        dbDelta($sql_merchants);
+        ) $charset_collate;");
 
         // 3. Customer Profiles table
         $table_customer_profiles = $wpdb->prefix . 'dube_customer_profiles';
-        $sql_customer_profiles = "CREATE TABLE $table_customer_profiles (
+        $wpdb->query("CREATE TABLE IF NOT EXISTS $table_customer_profiles (
             id bigint(20) NOT NULL AUTO_INCREMENT,
             merchant_id bigint(20) NOT NULL,
             user_id bigint(20) DEFAULT NULL,
@@ -80,12 +76,11 @@ class Smart_Dube_Database {
             current_balance decimal(12,2) DEFAULT '0.00' NOT NULL,
             status varchar(20) DEFAULT 'ACTIVE' NOT NULL,
             created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
-            PRIMARY KEY  (id),
+            PRIMARY KEY (id),
             KEY merchant_id (merchant_id),
             KEY user_id (user_id),
             KEY phone (phone)
-        ) $charset_collate;";
-        dbDelta($sql_customer_profiles);
+        ) $charset_collate;");
 
         // 4. Credit Transactions table
         $table_credit_transactions = $wpdb->prefix . 'dube_credit_transactions';
