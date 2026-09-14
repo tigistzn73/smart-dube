@@ -70,6 +70,16 @@ export const Login = () => {
     setLoading(true);
     setError('');
 
+    const cleanSignDigits = (phone || '').replace(/[^0-9]/g, '');
+    if (cleanSignDigits.length < 9) {
+      setError(t(
+        'Please enter a valid complete phone number (e.g. +251911223344 or 0911223344).',
+        'እባክዎ ትክክለኛ እና የተሟላ ስልክ ቁጥር ያስገቡ (ለምሳሌ፦ +251911223344 ወይም 0911223344)።'
+      ));
+      setLoading(false);
+      return;
+    }
+
     try {
       const res = await fetch('/api/auth/login', {
         method: 'POST',
@@ -114,6 +124,21 @@ export const Login = () => {
     setLoading(true);
     setError('');
     setSuccess('');
+
+    // Strict Ethiopian Phone Number Validation
+    const cleanDigits = (regForm.phone || '').replace(/[^0-9]/g, '');
+    const isValidPhone = (cleanDigits.startsWith('251') && cleanDigits.length === 12) ||
+                         (cleanDigits.startsWith('0') && cleanDigits.length === 10) ||
+                         (cleanDigits.length === 9 && (cleanDigits.startsWith('9') || cleanDigits.startsWith('7')));
+
+    if (!isValidPhone) {
+      setError(t(
+        'Please enter a valid complete 9-digit Ethiopian phone number (e.g. +251911223344 or 0911223344).',
+        'እባክዎ ትክክለኛ እና የተሟላ ባለ 9 አሃዝ የኢትዮጵያ ስልክ ቁጥር ያስገቡ (ለምሳሌ፦ +251911223344 ወይም 0911223344)።'
+      ));
+      setLoading(false);
+      return;
+    }
 
     if (regForm.password !== regForm.confirmPassword) {
       setError('Passwords do not match.');
@@ -163,6 +188,16 @@ export const Login = () => {
     setLoading(true);
     setError('');
     setDemoOTP('');
+
+    const cleanDigits = (forgotPhone || '').replace(/[^0-9]/g, '');
+    if (cleanDigits.length < 9) {
+      setError(t(
+        'Please enter a valid complete phone number.',
+        'እባክዎ የተሟላ ስልክ ቁጥር ያስገቡ።'
+      ));
+      setLoading(false);
+      return;
+    }
 
     try {
       const data = await forgotPassword(forgotPhone);

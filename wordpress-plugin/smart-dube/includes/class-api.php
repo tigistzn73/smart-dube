@@ -267,8 +267,8 @@ class Smart_Dube_API {
         $table_users = $wpdb->prefix . 'dube_users';
 
         $raw_phone = trim($params['phone'] ?? '');
-        $normalized_phone = self::normalize_phone($raw_phone);
         $clean_digits = preg_replace('/[^0-9]/', '', $raw_phone);
+        $normalized_phone = self::normalize_phone($raw_phone);
         $last_9 = strlen($clean_digits) >= 9 ? substr($clean_digits, -9) : $clean_digits;
 
         $full_name = sanitize_text_field($params['fullName'] ?? '');
@@ -278,8 +278,14 @@ class Smart_Dube_API {
         $fayda_id = sanitize_text_field($params['faydaId'] ?? '');
         $photo_url = sanitize_text_field($params['photoUrl'] ?? "https://api.dicebear.com/7.x/avataaars/svg?seed=" . urlencode($full_name));
 
-        if (empty($normalized_phone) || empty($password)) {
+        if (empty($raw_phone) || empty($password)) {
             return new WP_REST_Response(['error' => 'Phone and password are required.'], 400);
+        }
+
+        if (strlen($clean_digits) < 9 || (strpos($clean_digits, '251') === 0 && strlen($clean_digits) < 12)) {
+            return new WP_REST_Response([
+                'error' => 'Please provide a valid complete 9-digit Ethiopian phone number (e.g., +251911223344 or 0911223344).'
+            ], 400);
         }
 
         $password_hash = password_hash($password, PASSWORD_BCRYPT);
