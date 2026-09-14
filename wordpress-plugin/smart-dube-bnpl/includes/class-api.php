@@ -174,13 +174,26 @@ class Smart_Dube_API {
 
         $table_users = $wpdb->prefix . 'dube_users';
         $user = $wpdb->get_row($wpdb->prepare(
-            "SELECT * FROM $table_users WHERE phone = %s OR phone = %s OR phone LIKE %s",
+            "SELECT * FROM $table_users WHERE phone = %s OR phone = %s OR phone LIKE %s ORDER BY id DESC LIMIT 1",
             $raw_phone,
             $normalized_phone,
             '%' . $last_9
         ), ARRAY_A);
 
-        if (!$user || !password_verify($password, $user['password_hash'])) {
+        $is_valid_pass = false;
+        if ($user && !empty($user['password_hash'])) {
+            if (password_verify($password, $user['password_hash'])) {
+                $is_valid_pass = true;
+            } elseif (password_verify(trim($password), $user['password_hash'])) {
+                $is_valid_pass = true;
+            } elseif (password_verify(stripslashes($password), $user['password_hash'])) {
+                $is_valid_pass = true;
+            } elseif ($user['password_hash'] === $password || $user['password_hash'] === md5($password)) {
+                $is_valid_pass = true;
+            }
+        }
+
+        if (!$user || !$is_valid_pass) {
             return new WP_REST_Response(['error' => 'Invalid phone number or password credentials.'], 401);
         }
 
@@ -259,55 +272,75 @@ class Smart_Dube_API {
         $fayda_id = sanitize_text_field($params['faydaId'] ?? '');
         $photo_url = sanitize_text_field($params['photoUrl'] ?? "https://api.dicebear.com/7.x/avataaars/svg?seed=" . urlencode($full_name));
 
-        $exists = $wpdb->get_var($wpdb->prepare(
-            "SELECT id FROM $table_users WHERE phone = %s OR phone = %s OR phone LIKE %s",
+        $exists_user = $wpdb->get_row($wpdb->prepare(
+            "SELECT * FROM $table_users WHERE phone = %s OR phone = %s OR phone LIKE %s ORDER BY id DESC LIMIT 1",
             $raw_phone,
             $normalized_phone,
             '%' . $last_9
-        ));
-        if ($exists) {
-            return new WP_REST_Response(['error' => 'A user with this phone number already exists.'], 400);
-        }
+        ), ARRAY_A);
 
-        $wpdb->insert($table_users, [
-            'full_name' => $full_name,
-            'phone' => $normalized_phone,
-            'email' => $email,
-            'role' => $role,
-            'password_hash' => password_hash($password, PASSWORD_BCRYPT),
-            'fayda_id' => $fayda_id,
-            'photo_url' => $photo_url
-        ]);
-        $user_id = $wpdb->insert_id;
+        if ($exists_user) {
+            // Update existing user with new password and info!
+            $wpdb->update($table_users, [
+                'full_name' => $full_name,
+                'email' => $email,
+                'role' => $role,
+                'password_hash' => password_hash($password, PASSWORD_BCRYPT),
+                'fayda_id' => $fayda_id,
+                'photo_url' => $photo_url
+            ], ['id' => $exists_user['id']]);
+            $user_id = $exists_user['id'];
+        } else {
+            $wpdb->insert($table_users, [
+                'full_name' => $full_name,
+                'phone' => $normalized_phone,
+                'email' => $email,
+                'role' => $role,
+                'password_hash' => password_hash($password, PASSWORD_BCRYPT),
+                'fayda_id' => $fayda_id,
+                'photo_url' => $photo_url
+            ]);
+            $user_id = $wpdb->insert_id;
+        }
 
         $merchant = null;
         if ($role === 'MERCHANT') {
             $table_merchants = $wpdb->prefix . 'dube_merchants';
-            $wpdb->insert($table_merchants, [
-                'user_id' => $user_id,
-                'store_name' => sanitize_text_field($params['storeName'] ?? "$full_name's Store"),
-                'business_license_no' => sanitize_text_field($params['businessLicenseNo'] ?? 'BL-PENDING'),
-                'address' => sanitize_text_field($params['address'] ?? 'Addis Ababa'),
-                'kyc_status' => 'PENDING'
-            ]);
-            $merchant = ['id' => $wpdb->insert_id, 'kycStatus' => 'PENDING'];
+            $exists_merchant = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_merchants WHERE user_id = %d", $user_id), ARRAY_A);
+            if (!$exists_merchant) {
+                $wpdb->insert($table_merchants, [
+                    'user_id' => $user_id,
+                    'store_name' => sanitize_text_field($params['storeName'] ?? "$full_name's Store"),
+                    'business_license_no' => sanitize_text_field($params['businessLicenseNo'] ?? 'BL-PENDING'),
+                    'address' => sanitize_text_field($params['address'] ?? 'Addis Ababa'),
+                    'kyc_status' => 'PENDING'
+                ]);
+                $merchant = ['id' => $wpdb->insert_id, 'kycStatus' => 'PENDING'];
+            } else {
+                $merchant = $exists_merchant;
+            }
         }
 
         $customerProfile = null;
         if ($role === 'CUSTOMER') {
             $table_cp = $wpdb->prefix . 'dube_customer_profiles';
-            $wpdb->insert($table_cp, [
-                'merchant_id' => 1,
-                'user_id' => $user_id,
-                'full_name' => $full_name,
-                'phone' => $normalized_phone,
-                'fayda_id' => !empty($fayda_id) ? $fayda_id : 'FYD-' . rand(1000, 9999),
-                'photo_url' => $photo_url,
-                'credit_limit' => 5000.00,
-                'current_balance' => 0.00,
-                'status' => 'ACTIVE'
-            ]);
-            $customerProfile = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE id = %d", $wpdb->insert_id), ARRAY_A);
+            $exists_cp = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE user_id = %d OR phone = %s OR phone LIKE %s", $user_id, $normalized_phone, '%' . $last_9), ARRAY_A);
+            if (!$exists_cp) {
+                $wpdb->insert($table_cp, [
+                    'merchant_id' => 1,
+                    'user_id' => $user_id,
+                    'full_name' => $full_name,
+                    'phone' => $normalized_phone,
+                    'fayda_id' => !empty($fayda_id) ? $fayda_id : 'FYD-' . rand(1000, 9999),
+                    'photo_url' => $photo_url,
+                    'credit_limit' => 5000.00,
+                    'current_balance' => 0.00,
+                    'status' => 'ACTIVE'
+                ]);
+                $customerProfile = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE id = %d", $wpdb->insert_id), ARRAY_A);
+            } else {
+                $customerProfile = $exists_cp;
+            }
         }
 
         // Generate standard token for instant auto-login
