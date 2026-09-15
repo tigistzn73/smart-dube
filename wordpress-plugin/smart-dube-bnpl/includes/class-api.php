@@ -564,12 +564,27 @@ class Smart_Dube_API {
         $repayment_id = intval($params['repaymentId'] ?? 0);
 
         $table_rep = $wpdb->prefix . 'dube_repayments';
-        $table_cp = $wpdb->prefix . 'dube_customer_profiles';
+        $table_cp  = $wpdb->prefix . 'dube_customer_profiles';
+        $table_tx  = $wpdb->prefix . 'dube_credit_transactions';
 
         $repayment = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_rep WHERE id = %d", $repayment_id), ARRAY_A);
         if ($repayment) {
             $wpdb->update($table_rep, ['status' => 'COMPLETED'], ['id' => $repayment_id]);
-            $wpdb->query($wpdb->prepare("UPDATE $table_cp SET current_balance = GREATEST(0, current_balance - %f) WHERE id = %d", $repayment['amount'], $repayment['customer_id']));
+            $wpdb->query($wpdb->prepare("UPDATE $table_cp SET current_balance = GREATEST(0, current_balance - %f) WHERE id = %d", floatval($repayment['amount']), $repayment['customer_id']));
+
+            // If this repayment is linked to a specific credit transaction, check if it's fully settled
+            if (!empty($repayment['transaction_id'])) {
+                $tx = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_tx WHERE id = %d", intval($repayment['transaction_id'])), ARRAY_A);
+                if ($tx) {
+                    $paid_so_far = floatval($wpdb->get_var($wpdb->prepare(
+                        "SELECT COALESCE(SUM(amount),0) FROM $table_rep WHERE transaction_id = %d AND status = 'COMPLETED'",
+                        intval($repayment['transaction_id'])
+                    )));
+                    if ($paid_so_far >= floatval($tx['total_amount'])) {
+                        $wpdb->update($table_tx, ['status' => 'SETTLED'], ['id' => intval($repayment['transaction_id'])]);
+                    }
+                }
+            }
         }
 
         return new WP_REST_Response(['message' => 'Repayment approved successfully'], 200);
@@ -677,21 +692,66 @@ class Smart_Dube_API {
     public static function customer_repay($request) {
         global $wpdb;
         $params = $request->get_json_params();
-        $table_rep = $wpdb->prefix . 'dube_repayments';
+        $table_rep   = $wpdb->prefix . 'dube_repayments';
+        $table_tx    = $wpdb->prefix . 'dube_credit_transactions';
+        $table_cp    = $wpdb->prefix . 'dube_customer_profiles';
+        $table_merch = $wpdb->prefix . 'dube_merchants';
+
+        $transaction_id = intval($params['transactionId'] ?? 0);
+        $customer_id    = intval($params['customerId'] ?? 0);
+        $amount         = floatval($params['amount'] ?? 0);
+
+        // Derive merchant_id from the linked credit transaction when not supplied
+        $merchant_id = intval($params['merchantId'] ?? 0);
+        if (!$merchant_id && $transaction_id) {
+            $tx_row = $wpdb->get_row($wpdb->prepare("SELECT merchant_id FROM $table_tx WHERE id = %d", $transaction_id), ARRAY_A);
+            if ($tx_row) $merchant_id = intval($tx_row['merchant_id']);
+        }
+
+        $is_receipt_upload = (sanitize_text_field($params['paymentGateway'] ?? '') === 'RECEIPT_UPLOAD');
+        $status = $is_receipt_upload ? 'PENDING' : 'PENDING'; // always PENDING until merchant approves
 
         $rep_ref = 'PAY-' . strtoupper(wp_generate_password(6, false));
-        $wpdb->insert($table_rep, [
-            'repayment_ref' => $rep_ref,
-            'customer_id' => intval($params['customerId']),
-            'merchant_id' => intval($params['merchantId']),
-            'amount' => floatval($params['amount']),
-            'payment_gateway' => sanitize_text_field($params['paymentGateway']),
-            'reference_code' => sanitize_text_field($params['referenceCode']),
-            'receipt_url' => sanitize_text_field($params['receiptUrl'] ?? null),
-            'status' => 'PENDING'
-        ]);
 
-        return new WP_REST_Response(['message' => 'Payment receipt submitted successfully', 'repaymentRef' => $rep_ref], 201);
+        $insert_data = [
+            'repayment_ref'   => $rep_ref,
+            'customer_id'     => $customer_id,
+            'merchant_id'     => $merchant_id,
+            'amount'          => $amount,
+            'payment_gateway' => sanitize_text_field($params['paymentGateway'] ?? 'TELEBIRR'),
+            'reference_code'  => sanitize_text_field($params['referenceCode'] ?? ''),
+            'receipt_url'     => sanitize_text_field($params['receiptUrl'] ?? ''),
+            'status'          => $status
+        ];
+        // Link to specific transaction if provided
+        if ($transaction_id) {
+            $insert_data['transaction_id'] = $transaction_id;
+        }
+        $wpdb->insert($table_rep, $insert_data);
+        $repayment_row_id = $wpdb->insert_id;
+
+        // Fetch store name for receipt
+        $store_name = '';
+        if ($merchant_id) {
+            $merch = $wpdb->get_row($wpdb->prepare("SELECT store_name FROM $table_merch WHERE id = %d", $merchant_id), ARRAY_A);
+            if ($merch) $store_name = $merch['store_name'];
+        }
+
+        $receipt = [
+            'repaymentRef'  => $rep_ref,
+            'gateway'       => sanitize_text_field($params['paymentGateway'] ?? ''),
+            'referenceCode' => sanitize_text_field($params['referenceCode'] ?? ''),
+            'amount'        => $amount,
+            'status'        => $status,
+            'storeName'     => $store_name,
+            'transactionId' => $transaction_id ?: null,
+        ];
+
+        return new WP_REST_Response([
+            'message'      => 'Payment receipt submitted successfully',
+            'repaymentRef' => $rep_ref,
+            'receipt'      => $receipt
+        ], 201);
     }
 
     // 11. Customer Schedule Endpoints
