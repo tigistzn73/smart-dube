@@ -709,6 +709,8 @@ class Smart_Dube_API {
         
         $total_dube = $wpdb->get_var("SELECT COALESCE(SUM(total_amount), 0) FROM $table_tx");
         $total_rep = $wpdb->get_var("SELECT COALESCE(SUM(amount), 0) FROM $table_rep WHERE status = 'COMPLETED'");
+        $total_merchants_count = $wpdb->get_var("SELECT COUNT(*) FROM $table_merchants");
+        $pending_kyc_count = $wpdb->get_var("SELECT COUNT(*) FROM $table_merchants WHERE kyc_status = 'PENDING'");
         $active_merchants_count = $wpdb->get_var("SELECT COUNT(*) FROM $table_merchants WHERE kyc_status = 'VERIFIED'");
         $active_cust_count = $wpdb->get_var("SELECT COUNT(*) FROM $table_cp WHERE status = 'ACTIVE'");
         
@@ -717,9 +719,11 @@ class Smart_Dube_API {
         return new WP_REST_Response([
             'merchants' => $merchants ?: [],
             'metrics' => [
+                'totalMerchants' => intval($total_merchants_count ?: (is_array($merchants) ? count($merchants) : 0)),
+                'activeMerchants' => intval($active_merchants_count),
+                'pendingKycCount' => intval($pending_kyc_count),
                 'totalDubeIssued' => floatval($total_dube),
                 'totalRepayments' => floatval($total_rep),
-                'activeMerchants' => intval($active_merchants_count),
                 'activeCustomers' => intval($active_cust_count)
             ],
             'transactions' => $transactions ?: []

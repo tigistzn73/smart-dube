@@ -141,8 +141,14 @@ export const AdminDashboard = () => {
     );
   }
 
-  const metrics = data?.metrics || {};
+  const rawMetrics = data?.metrics || {};
   const merchants = data?.merchants || [];
+  const metrics = {
+    pendingKycCount: rawMetrics.pendingKycCount !== undefined ? rawMetrics.pendingKycCount : merchants.filter(m => m.kyc_status === 'PENDING').length,
+    totalMerchants: rawMetrics.totalMerchants !== undefined ? rawMetrics.totalMerchants : (rawMetrics.activeMerchants !== undefined ? rawMetrics.activeMerchants : merchants.length),
+    totalDubeIssued: rawMetrics.totalDubeIssued || 0,
+    totalRepayments: rawMetrics.totalRepayments || 0
+  };
 
   const chartWidth = 500;
   const chartHeight = 150;
