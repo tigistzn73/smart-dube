@@ -304,7 +304,8 @@ export const MerchantDashboard = () => {
       setNotes('');
       fetchDashboardData();
       setActiveTab('TRANSACTIONS');
-      setSmsFeedback(`Credit purchase logged successfully! Ref: ${data.transaction.txRef}`);
+      const refCode = data.transactionRef || data.transaction?.txRef || data.transaction?.transaction_ref || 'SUCCESS';
+      setSmsFeedback(`Credit purchase logged successfully! Ref: ${refCode}`);
       setTimeout(() => setSmsFeedback(''), 4500);
     } catch (err) {
       alert(err.message);

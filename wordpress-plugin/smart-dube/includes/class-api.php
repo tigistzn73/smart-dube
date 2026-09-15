@@ -494,7 +494,17 @@ class Smart_Dube_API {
                 );
             }
 
-            return new WP_REST_Response(['message' => 'Credit transaction logged successfully', 'transactionRef' => $tx_ref], 201);
+            return new WP_REST_Response([
+                'message' => 'Credit transaction logged successfully',
+                'transactionRef' => $tx_ref,
+                'transaction' => [
+                    'id' => $wpdb->insert_id,
+                    'txRef' => $tx_ref,
+                    'transaction_ref' => $tx_ref,
+                    'total_amount' => $total_amount,
+                    'status' => 'PENDING'
+                ]
+            ], 201);
         }
 
         $transactions = $wpdb->get_results($wpdb->prepare(
