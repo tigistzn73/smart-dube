@@ -194,6 +194,8 @@ export const CustomerPortal = () => {
   const pendingTransactions = transactions.filter(tx => tx.status !== 'SETTLED');
   const repayments = data?.repayments || [];
   const profiles = data?.profiles || [];
+  // activeSchedules: array of schedule blocks, one per transaction, each with installments[]
+  const activeSchedules = data?.activeSchedules || (data?.activeSchedule ? [data.activeSchedule] : []);
 
   const chartWidth = 500;
   const chartHeight = 150;
@@ -645,81 +647,101 @@ export const CustomerPortal = () => {
                     )}
                   </div>
 
-                  {/* Resolve current active schedule for the chosen store */}
+                  {/* Resolve and display per-transaction installment schedule blocks */}
                   {(() => {
-                    const allActiveSchedules = data?.activeSchedules || (data?.activeSchedule ? [data.activeSchedule] : []);
                     const activeMerchantId = (selectedScheduleViewMerchant && selectedScheduleViewMerchant !== 'ALL')
                       ? selectedScheduleViewMerchant
                       : (profiles[0] ? String(profiles[0].merchant_id) : '');
 
                     const profileForStore = profiles.find(p => String(p.merchant_id) === activeMerchantId) || profiles[0];
-                    const currentViewSchedule = allActiveSchedules.find(s =>
-                      (profileForStore && String(s.merchant_id) === String(profileForStore.merchant_id)) ||
-                      (profileForStore && s.customer_id === profileForStore.id)
+
+                    // Filter schedules for this merchant
+                    const merchantSchedules = activeSchedules.filter(s =>
+                      !activeMerchantId || String(s.merchant_id) === activeMerchantId
                     );
 
-                    const hasUnpaidInsts = currentViewSchedule && currentViewSchedule.installments?.some(i => i.status !== 'PAID');
-
-                    if (currentViewSchedule && hasUnpaidInsts) {
+                    if (merchantSchedules.length > 0) {
                       return (
-                        <div className="mt-3 space-y-2 bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
-                          <div className="text-[11px] font-bold text-sky-400 flex justify-between items-center">
-                            <span>
-                              {t('Active Plan for', 'ለ')} {profileForStore?.store_name || currentViewSchedule.store_name}:
-                            </span>
-                            <span className="text-[10px] text-slate-400 font-mono">
-                              {currentViewSchedule.installments.filter(i => i.status === 'PAID').length} / {currentViewSchedule.installments.length} {t('Paid', 'ተከፍሏል')}
-                            </span>
-                          </div>
-                          {currentViewSchedule.installments.map(inst => (
-                            <div key={inst.installmentNo} className="flex justify-between items-center text-xs py-1.5 border-b border-slate-800/60 font-mono">
-                              <div>
-                                <span className="text-slate-200">{t('Inst', 'ክፍል')} #{inst.installmentNo} ({t('Due', 'ቀን')}: {inst.dueDate})</span>
+                        <div className="mt-3 space-y-3">
+                          {merchantSchedules.map((sched, si) => {
+                            // Find the exact credit transaction this schedule belongs to
+                            const linkedTx = sched.transaction_id
+                              ? transactions.find(tx => tx.id === sched.transaction_id || String(tx.id) === String(sched.transaction_id))
+                              : null;
+                            const unpaidCount = sched.installments?.filter(i => i.status !== 'PAID').length || 0;
+                            const paidCount   = sched.installments?.filter(i => i.status === 'PAID').length || 0;
+
+                            return (
+                              <div key={si} className="bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
+                                <div className="text-[11px] font-bold text-sky-400 flex justify-between items-center mb-2">
+                                  <span className="flex items-center gap-1.5">
+                                    <Store className="w-3.5 h-3.5" />
+                                    {sched.store_name || profileForStore?.store_name}
+                                    {linkedTx && (
+                                      <span className="text-[10px] text-slate-400 font-mono font-normal">
+                                        — {linkedTx.transaction_ref}
+                                      </span>
+                                    )}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400 font-mono">
+                                    {paidCount} / {sched.installments?.length} {t('Paid', 'ተከፍሏል')}
+                                  </span>
+                                </div>
+                                {sched.installments?.map(inst => (
+                                  <div key={inst.installmentNo} className="flex justify-between items-center text-xs py-1.5 border-b border-slate-800/60 font-mono">
+                                    <div>
+                                      <span className="text-slate-200">{t('Inst', 'ክፍል')} #{inst.installmentNo} ({t('Due', 'ቀን')}: {inst.dueDate})</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-amber-400 font-bold">{fmt(inst.amount)} ETB</span>
+                                      {inst.status === 'PAID' ? (
+                                        <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 font-bold">{t('PAID', 'ተከፍሏል')}</span>
+                                      ) : (
+                                        <button
+                                          onClick={() => {
+                                            // Use the exact linked transaction, or find best match
+                                            const targetTx = linkedTx
+                                              || transactions.find(tx => String(tx.id) === String(sched.transaction_id))
+                                              || transactions.find(tx => tx.merchant_id === sched.merchant_id && tx.status !== 'SETTLED')
+                                              || transactions.find(tx => tx.status !== 'SETTLED')
+                                              || transactions[0];
+                                            if (targetTx) {
+                                              setSelectedTxForPayment({
+                                                ...targetTx,
+                                                store_name: sched.store_name || targetTx.store_name,
+                                                merchant_id: sched.merchant_id || targetTx.merchant_id,
+                                                customer_id: sched.customer_id || targetTx.customer_id,
+                                                total_amount: inst.amount,
+                                                installmentNo: inst.installmentNo,
+                                                scheduleInstallmentId: inst.id
+                                              });
+                                            }
+                                          }}
+                                          className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold cursor-pointer transition-all"
+                                        >
+                                          {t('Pay', 'ክፈል')}
+                                        </button>
+                                      )}
+                                    </div>
+                                  </div>
+                                ))}
+                                <button
+                                  onClick={() => {
+                                    setSelectedScheduleMerchant(String(sched.merchant_id || profileForStore?.merchant_id || ''));
+                                    openScheduleModal();
+                                  }}
+                                  className="w-full mt-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-semibold transition-colors cursor-pointer"
+                                >
+                                  {t('Change / Customize Schedule', 'የጊዜ ሰሌዳውን ቀይር / አስተካክል')}
+                                </button>
                               </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-amber-400 font-bold">{fmt(inst.amount)} ETB</span>
-                                {inst.status === 'PAID' ? (
-                                  <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 font-bold">{t('PAID', 'ተከፍሏል')}</span>
-                                ) : (
-                                  <button
-                                    onClick={() => {
-                                      const targetTx = transactions.find(t => t.customer_id === profileForStore?.id && t.status !== 'SETTLED')
-                                        || transactions.find(t => t.merchant_id === profileForStore?.merchant_id && t.status !== 'SETTLED')
-                                        || transactions.find(t => t.status !== 'SETTLED')
-                                        || transactions[0];
-                                      if (targetTx) {
-                                        setSelectedTxForPayment({
-                                          ...targetTx,
-                                          store_name: profileForStore ? profileForStore.store_name : targetTx.store_name,
-                                          merchant_id: profileForStore ? profileForStore.merchant_id : targetTx.merchant_id,
-                                          customer_id: profileForStore ? profileForStore.id : targetTx.customer_id,
-                                          total_amount: inst.amount,
-                                          installmentNo: inst.installmentNo
-                                        });
-                                      }
-                                    }}
-                                    className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold cursor-pointer transition-all"
-                                  >
-                                    {t('Pay', 'ክፈል')}
-                                  </button>
-                                )}
-                              </div>
-                            </div>
-                          ))}
-                          <button
-                            onClick={() => {
-                              setSelectedScheduleMerchant(String(profileForStore?.merchant_id || ''));
-                              openScheduleModal();
-                            }}
-                            className="w-full mt-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-semibold transition-colors cursor-pointer"
-                          >
-                            {t('Change / Customize Schedule', 'የጊዜ ሰሌዳውን ቀይር / አስተካክል')}
-                          </button>
+                            );
+                          })}
                         </div>
                       );
                     }
 
-                    // No schedule for this specific selected store yet
+                    // No schedule for this store yet
                     return (
                       <div className="mt-4 p-4 rounded-xl bg-slate-900/80 border border-slate-800/80 text-center space-y-2.5">
                         <p className="text-xs text-slate-300 font-medium">
