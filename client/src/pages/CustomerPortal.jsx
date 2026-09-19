@@ -37,6 +37,7 @@ export const CustomerPortal = () => {
   const [scheduleModalOpen, setScheduleModalOpen] = useState(false);
   const [frequency, setFrequency] = useState('WEEKLY');
   const [numInstallments, setNumInstallments] = useState(2);
+  const [scheduleMode, setScheduleMode] = useState('DEADLINE'); // 'DEADLINE' | 'EXTEND'
   const [scheduleResult, setScheduleResult] = useState(null);
   const [selectedScheduleMerchant, setSelectedScheduleMerchant] = useState('ALL');
   const [selectedScheduleViewMerchant, setSelectedScheduleViewMerchant] = useState('ALL');
@@ -84,6 +85,16 @@ export const CustomerPortal = () => {
 
   const [applyingSchedule, setApplyingSchedule] = useState(false);
 
+  const handleUpdateInstallmentDate = (installmentNo, newDate) => {
+    if (!scheduleResult) return;
+    setScheduleResult(prev => ({
+      ...prev,
+      installments: prev.installments.map(inst =>
+        inst.installmentNo === installmentNo ? { ...inst, dueDate: newDate } : inst
+      )
+    }));
+  };
+
   const handleGenerateSchedule = async () => {
     let targetBalance = summary.totalBalance || 0;
     let chosenTx = null;
@@ -98,6 +109,17 @@ export const CustomerPortal = () => {
     } else if (selectedScheduleMerchant !== 'ALL') {
       const p = profiles.find(pr => String(pr.merchant_id) === String(selectedScheduleMerchant));
       if (p) targetBalance = parseFloat(p.current_balance) || 0;
+      const merchantTxs = transactions.filter(t => t.status !== 'SETTLED' && String(t.merchant_id) === String(selectedScheduleMerchant) && t.due_date);
+      if (merchantTxs.length > 0) {
+        const sorted = [...merchantTxs].sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
+        targetDueDate = sorted[0].due_date ? String(sorted[0].due_date).split('T')[0] : null;
+      }
+    } else {
+      const allPending = transactions.filter(t => t.status !== 'SETTLED' && t.due_date);
+      if (allPending.length > 0) {
+        const sorted = [...allPending].sort((a, b) => new Date(a.due_date) - new Date(b.due_date));
+        targetDueDate = sorted[0].due_date ? String(sorted[0].due_date).split('T')[0] : null;
+      }
     }
 
     if (!targetBalance || targetBalance <= 0) {
@@ -120,7 +142,9 @@ export const CustomerPortal = () => {
           totalAmount: targetBalance,
           frequency,
           numInstallments,
-          startDate: targetDueDate || new Date().toISOString().split('T')[0],
+          deadlineDate: targetDueDate,
+          startDate: new Date().toISOString().split('T')[0],
+          scheduleMode,
           merchantId: merchantIdForSchedule,
           transactionId: chosenTx ? chosenTx.id : null
         })
@@ -128,7 +152,7 @@ export const CustomerPortal = () => {
 
       if (res.ok) {
         const sData = await res.json();
-        if (sData.installments) {
+        if (sData.installments && sData.installments.length > 0) {
           setScheduleResult(sData);
           return;
         }
@@ -137,34 +161,84 @@ export const CustomerPortal = () => {
       console.warn('API schedule calculation fallback to client-side:', err);
     }
 
-    // Resilient client-side calculation fallback
+    // Accurate client-side calculation matching the deadline
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+
+    const deadline = targetDueDate ? new Date(targetDueDate + 'T00:00:00') : null;
+    const isFutureDeadline = deadline && deadline.getTime() >= today.getTime();
+
     const installments = [];
     const baseInst = Math.round((targetBalance / numInstallments) * 100) / 100;
     let cumulative = 0;
-    const baseDate = targetDueDate ? new Date(targetDueDate) : new Date();
 
-    for (let i = 1; i <= numInstallments; i++) {
-      const d = new Date(baseDate);
-      if (frequency === 'WEEKLY') {
-        d.setDate(d.getDate() + i * 7);
-      } else {
-        d.setMonth(d.getMonth() + i);
+    if (isFutureDeadline && scheduleMode !== 'EXTEND') {
+      // Future deadline exists & DEADLINE mode:
+      // Installment #N lands EXACTLY on targetDueDate (the agreed deadline).
+      // Preceding installments are spaced evenly or weekly BEFORE the deadline.
+      const totalDays = Math.max(1, Math.round((deadline.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
+
+      for (let i = 1; i <= numInstallments; i++) {
+        let dueStr = targetDueDate;
+        if (i < numInstallments) {
+          const stepsBack = numInstallments - i;
+          const tentative = new Date(deadline);
+          if (frequency === 'WEEKLY') {
+            tentative.setDate(tentative.getDate() - stepsBack * 7);
+          } else {
+            tentative.setMonth(tentative.getMonth() - stepsBack);
+          }
+
+          if (tentative.getTime() >= today.getTime()) {
+            dueStr = tentative.toISOString().split('T')[0];
+          } else {
+            const dayOffset = Math.max(1, Math.round((i / numInstallments) * totalDays));
+            const interim = new Date(today);
+            interim.setDate(interim.getDate() + dayOffset);
+            if (interim.getTime() >= deadline.getTime()) {
+              interim.setDate(deadline.getDate() - 1);
+            }
+            dueStr = interim.toISOString().split('T')[0];
+          }
+        }
+
+        const amt = i === numInstallments ? Math.round((targetBalance - cumulative) * 100) / 100 : baseInst;
+        cumulative += amt;
+        installments.push({
+          installmentNo: i,
+          dueDate: dueStr,
+          amount: amt,
+          status: 'PENDING',
+          isDeadline: (i === numInstallments)
+        });
       }
-      const dueStr = d.toISOString().split('T')[0];
-      const amt = i === numInstallments ? Math.round((targetBalance - cumulative) * 100) / 100 : baseInst;
-      cumulative += amt;
-      installments.push({
-        installmentNo: i,
-        dueDate: dueStr,
-        amount: amt,
-        status: 'PENDING'
-      });
+    } else {
+      // Overdue deadline, missing deadline, or EXTEND mode: step forward into future from today
+      for (let i = 1; i <= numInstallments; i++) {
+        const d = new Date(today);
+        if (frequency === 'WEEKLY') {
+          d.setDate(d.getDate() + i * 7);
+        } else {
+          d.setMonth(d.getMonth() + i);
+        }
+        const dueStr = d.toISOString().split('T')[0];
+        const amt = i === numInstallments ? Math.round((targetBalance - cumulative) * 100) / 100 : baseInst;
+        cumulative += amt;
+        installments.push({
+          installmentNo: i,
+          dueDate: dueStr,
+          amount: amt,
+          status: 'PENDING',
+          isDeadline: false
+        });
+      }
     }
 
     setScheduleResult({
       totalAmount: targetBalance,
       frequency,
       numInstallments,
+      deadlineDate: targetDueDate,
       installments
     });
   };
@@ -230,6 +304,7 @@ export const CustomerPortal = () => {
     }
     setNumInstallments(2);
     setFrequency('WEEKLY');
+    setScheduleMode('DEADLINE');
     setScheduleResult(null);
     setScheduleModalOpen(true);
   };
@@ -1149,9 +1224,72 @@ export const CustomerPortal = () => {
                 );
               })()}
 
-              {/* 2. Repayment Frequency */}
+              {/* 2. Schedule Strategy based on Deadline */}
+              {(() => {
+                const chosenTx = selectedScheduleTxId !== 'ALL'
+                  ? transactions.find(t => String(t.id) === String(selectedScheduleTxId))
+                  : null;
+                const dDate = chosenTx?.due_date ? String(chosenTx.due_date).split('T')[0] : null;
+
+                if (!dDate) return null;
+
+                return (
+                  <div className="space-y-1.5 pt-1">
+                    <label className="block text-xs font-bold text-slate-300">
+                      {t('Schedule Strategy based on Deadline:', 'በቀነ ገደቡ ላይ የተመሰረተ የመክፈያ ስልት፦')}
+                    </label>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScheduleMode('DEADLINE');
+                          setScheduleResult(null);
+                        }}
+                        className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                          scheduleMode === 'DEADLINE'
+                            ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-300'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="text-xs font-bold flex items-center gap-1.5">
+                          <span>🎯</span>
+                          <span>{t('Match Deadline', 'ከቀነ ገደቡ ጋር አዛምድ')}</span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-0.5">
+                          {t(`Concludes on ${dDate}`, `በ ${dDate} ይጠናቀቃል`)}
+                        </p>
+                      </button>
+
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setScheduleMode('EXTEND');
+                          setScheduleResult(null);
+                        }}
+                        className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
+                          scheduleMode === 'EXTEND'
+                            ? 'bg-sky-500/10 border-sky-500/50 text-sky-300'
+                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
+                        }`}
+                      >
+                        <div className="text-xs font-bold flex items-center gap-1.5">
+                          <span>📅</span>
+                          <span>{t('Extend Beyond Deadline', 'ከቀነ ገደቡ በላይ አራዝም')}</span>
+                        </div>
+                        <p className="text-[10px] text-slate-400 mt-0.5">
+                          {t('Forward into future weeks', 'ወደ ፊት ሳምንታት የሚራዘም')}
+                        </p>
+                      </button>
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* 3. Repayment Frequency */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">Repayment Frequency:</label>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  {t('Repayment Frequency:', 'የመክፈያ ድግግሞሽ፦')}
+                </label>
                 <select
                   value={frequency}
                   onChange={e => {
@@ -1160,14 +1298,16 @@ export const CustomerPortal = () => {
                   }}
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-slate-100 font-semibold focus:border-sky-500 outline-none"
                 >
-                  <option value="WEEKLY">Weekly Installments</option>
-                  <option value="MONTHLY">Monthly Installments</option>
+                  <option value="WEEKLY">{t('Weekly Installments', 'ሳምንታዊ ክፍያዎች')}</option>
+                  <option value="MONTHLY">{t('Monthly Installments', 'ወርሃዊ ክፍያዎች')}</option>
                 </select>
               </div>
 
-              {/* 3. Number of Installments */}
+              {/* 4. Number of Installments */}
               <div>
-                <label className="block text-xs font-bold text-slate-300 mb-1">Number of Installments:</label>
+                <label className="block text-xs font-bold text-slate-300 mb-1">
+                  {t('Number of Installments:', 'የክፍያ ዙሮች ብዛት፦')}
+                </label>
                 <select
                   value={numInstallments}
                   onChange={e => {
@@ -1176,55 +1316,74 @@ export const CustomerPortal = () => {
                   }}
                   className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-slate-100 font-semibold focus:border-sky-500 outline-none"
                 >
-                  <option value={2}>2 Installments</option>
-                  <option value={3}>3 Installments</option>
-                  <option value={4}>4 Installments</option>
-                  <option value={6}>6 Installments</option>
-                  <option value={12}>12 Installments</option>
+                  <option value={2}>2 {t('Installments', 'ዙሮች')}</option>
+                  <option value={3}>3 {t('Installments', 'ዙሮች')}</option>
+                  <option value={4}>4 {t('Installments', 'ዙሮች')}</option>
+                  <option value={6}>6 {t('Installments', 'ዙሮች')}</option>
+                  <option value={12}>12 {t('Installments', 'ዙሮች')}</option>
                 </select>
               </div>
 
-
-              {/* 6. Calculate Schedule Button */}
+              {/* 5. Calculate Schedule Button */}
               <button
                 onClick={handleGenerateSchedule}
-                className="w-full py-3 rounded-xl bg-sky-600 hover:bg-sky-500 text-white font-bold text-xs shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
+                className="w-full py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-black text-xs shadow-md transition-all cursor-pointer flex items-center justify-center gap-2"
               >
                 <Clock className="w-4 h-4" />
-                <span>Calculate Schedule</span>
+                <span>{t('Calculate Schedule', 'የክፍያ ሰሌዳ አስላ')}</span>
               </button>
 
-              {/* 7. Show Installment Breakdown */}
+              {/* 6. Show Installment Breakdown */}
               {scheduleResult && (
                 <div className="space-y-3 pt-2">
-                  <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 space-y-2.5 max-h-60 overflow-y-auto">
+                  <div className="bg-slate-900 p-4 rounded-xl border border-slate-800 space-y-2.5 max-h-64 overflow-y-auto">
                     <div className="flex justify-between items-center pb-2 border-b border-slate-800">
-                      <h4 className="text-xs font-bold text-emerald-400">Installment Breakdown:</h4>
+                      <h4 className="text-xs font-bold text-emerald-400 flex items-center gap-1.5">
+                        <Calendar className="w-3.5 h-3.5" />
+                        <span>{t('Installment Breakdown:', 'የተሰላ የክፍያ ዝርዝር፦')}</span>
+                      </h4>
                       <span className="text-[10px] text-slate-400 font-mono">
-                        {scheduleResult.installments.length} Installments
+                        {scheduleResult.installments.length} {t('Installments', 'ዙሮች')}
                       </span>
                     </div>
-                    {scheduleResult.installments.map(inst => (
-                      <div key={inst.installmentNo} className="flex justify-between items-center text-xs py-1.5 px-2 bg-slate-950/60 rounded-lg border border-slate-800/80 font-mono">
-                        <div className="flex items-center gap-2">
-                          <span className="w-5 h-5 rounded-full bg-sky-500/20 text-sky-400 text-[10px] font-bold flex items-center justify-center">
-                            #{inst.installmentNo}
-                          </span>
-                          <span className="text-slate-200">Due Date: {inst.dueDate}</span>
+
+                    <div className="space-y-2">
+                      {scheduleResult.installments.map(inst => (
+                        <div
+                          key={inst.installmentNo}
+                          className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-xs py-2 px-3 bg-slate-950/70 rounded-xl border border-slate-800/80 font-mono"
+                        >
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="w-5 h-5 rounded-full bg-sky-500/20 text-sky-400 text-[10px] font-bold flex items-center justify-center shrink-0">
+                              #{inst.installmentNo}
+                            </span>
+                            <span className="text-slate-400 text-[11px] font-semibold">{t('Due Date:', 'የመክፈያ ቀን፦')}</span>
+                            <input
+                              type="date"
+                              value={inst.dueDate}
+                              onChange={e => handleUpdateInstallmentDate(inst.installmentNo, e.target.value)}
+                              className="bg-slate-900 border border-slate-700 hover:border-sky-500 rounded px-2 py-0.5 text-xs text-slate-100 font-mono focus:border-sky-500 outline-none cursor-pointer"
+                            />
+                            {inst.isDeadline && (
+                              <span className="px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 text-[10px] font-bold border border-emerald-500/30 flex items-center gap-1">
+                                🎯 {t('Deadline Match', 'የቀነ ገደብ ቀን')}
+                              </span>
+                            )}
+                          </div>
+                          <span className="text-amber-400 font-bold self-end sm:self-auto text-xs">{fmt(inst.amount)} ETB</span>
                         </div>
-                        <span className="text-amber-400 font-bold">{fmt(inst.amount)} ETB</span>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
 
-                  {/* 8. Customer Confirm */}
+                  {/* 7. Customer Confirm */}
                   <button
                     onClick={handleApplySchedule}
                     disabled={applyingSchedule}
                     className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white font-extrabold text-xs shadow-lg shadow-emerald-600/20 flex items-center justify-center gap-2 cursor-pointer transition-all disabled:opacity-50"
                   >
                     <CheckCircle2 className="w-4 h-4" />
-                    <span>{applyingSchedule ? 'Confirming...' : 'Customer Confirm & Apply Schedule'}</span>
+                    <span>{applyingSchedule ? t('Confirming...', 'በማረጋገጥ ላይ...') : t('Customer Confirm & Apply Schedule', 'የክፍያ ሰሌዳውን አረጋግጥና ተግብር')}</span>
                   </button>
                 </div>
               )}

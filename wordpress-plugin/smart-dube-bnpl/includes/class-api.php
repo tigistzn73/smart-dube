@@ -475,7 +475,7 @@ class Smart_Dube_API {
                 'merchant_id' => $merchant_id,
                 'items_json' => $items_json,
                 'total_amount' => $total_amount,
-                'due_date' => date('Y-m-d', strtotime('+14 days')),
+                'due_date' => !empty($params['dueDate']) ? sanitize_text_field($params['dueDate']) : date('Y-m-d', strtotime('+14 days')),
                 'status' => 'PENDING',
                 'notes' => sanitize_text_field($params['notes'] ?? 'Dube Credit Sale')
             ]);
@@ -747,42 +747,101 @@ class Smart_Dube_API {
             $total_amount = floatval($params['totalAmount'] ?? 0);
             $frequency = strtoupper(sanitize_text_field($params['frequency'] ?? 'WEEKLY'));
             $num_installments = max(1, intval($params['numInstallments'] ?? 2));
-            $start_date = !empty($params['startDate']) ? sanitize_text_field($params['startDate']) : date('Y-m-d');
+            $transaction_id = !empty($params['transactionId']) ? intval($params['transactionId']) : null;
+            $deadline_date = !empty($params['deadlineDate']) ? sanitize_text_field($params['deadlineDate']) : null;
+            $schedule_mode = sanitize_text_field($params['scheduleMode'] ?? 'DEADLINE');
+
+            // If deadline not explicitly passed but transactionId is, look up that transaction's due_date
+            if (!$deadline_date && $transaction_id) {
+                $table_tx = $wpdb->prefix . 'dube_credit_transactions';
+                $deadline_date = $wpdb->get_var($wpdb->prepare("SELECT due_date FROM $table_tx WHERE id = %d", $transaction_id));
+            }
 
             if ($total_amount <= 0) {
                 return new WP_REST_Response(['error' => 'Valid debt amount is required to calculate schedule.'], 400);
             }
 
+            $today = date('Y-m-d');
             $installments = [];
             $base_installment = round($total_amount / $num_installments, 2);
             $cumulative = 0;
 
-            for ($i = 1; $i <= $num_installments; $i++) {
-                if ($frequency === 'WEEKLY') {
-                    $due_date = date('Y-m-d', strtotime("+{$i} week", strtotime($start_date)));
-                } else {
-                    $due_date = date('Y-m-d', strtotime("+{$i} month", strtotime($start_date)));
-                }
+            if (!empty($deadline_date) && strtotime($deadline_date) >= strtotime($today) && $schedule_mode !== 'EXTEND') {
+                // Future/current deadline exists & DEADLINE mode: align the final installment EXACTLY on the deadline,
+                // and space preceding installments evenly or weekly before the deadline.
+                $deadline_ts = strtotime($deadline_date);
+                $today_ts = strtotime($today);
+                $total_days = max(1, round(($deadline_ts - $today_ts) / 86400));
 
-                if ($i === $num_installments) {
-                    $inst_amount = round($total_amount - $cumulative, 2);
-                } else {
-                    $inst_amount = $base_installment;
-                    $cumulative += $inst_amount;
-                }
+                for ($i = 1; $i <= $num_installments; $i++) {
+                    if ($i === $num_installments) {
+                        $due_date = $deadline_date;
+                    } else {
+                        $steps_back = $num_installments - $i;
+                        if ($frequency === 'WEEKLY') {
+                            $tentative = date('Y-m-d', strtotime("-{$steps_back} week", $deadline_ts));
+                        } else {
+                            $tentative = date('Y-m-d', strtotime("-{$steps_back} month", $deadline_ts));
+                        }
 
-                $installments[] = [
-                    'installmentNo' => $i,
-                    'dueDate' => $due_date,
-                    'amount' => $inst_amount,
-                    'status' => 'PENDING'
-                ];
+                        if (strtotime($tentative) >= $today_ts) {
+                            $due_date = $tentative;
+                        } else {
+                            $day_offset = max(1, round(($i / $num_installments) * $total_days));
+                            $due_date = date('Y-m-d', strtotime("+{$day_offset} days", $today_ts));
+                            if (strtotime($due_date) >= $deadline_ts) {
+                                $due_date = date('Y-m-d', strtotime("-1 day", $deadline_ts));
+                            }
+                        }
+                    }
+
+                    if ($i === $num_installments) {
+                        $inst_amount = round($total_amount - $cumulative, 2);
+                    } else {
+                        $inst_amount = $base_installment;
+                        $cumulative += $inst_amount;
+                    }
+
+                    $installments[] = [
+                        'installmentNo' => $i,
+                        'dueDate' => $due_date,
+                        'amount' => $inst_amount,
+                        'status' => 'PENDING',
+                        'isDeadline' => ($i === $num_installments)
+                    ];
+                }
+            } else {
+                // If deadline is missing, overdue, or EXTEND mode, step forward into future from today
+                $start_ts = strtotime($today);
+                for ($i = 1; $i <= $num_installments; $i++) {
+                    if ($frequency === 'WEEKLY') {
+                        $due_date = date('Y-m-d', strtotime("+{$i} week", $start_ts));
+                    } else {
+                        $due_date = date('Y-m-d', strtotime("+{$i} month", $start_ts));
+                    }
+
+                    if ($i === $num_installments) {
+                        $inst_amount = round($total_amount - $cumulative, 2);
+                    } else {
+                        $inst_amount = $base_installment;
+                        $cumulative += $inst_amount;
+                    }
+
+                    $installments[] = [
+                        'installmentNo' => $i,
+                        'dueDate' => $due_date,
+                        'amount' => $inst_amount,
+                        'status' => 'PENDING',
+                        'isDeadline' => false
+                    ];
+                }
             }
 
             return new WP_REST_Response([
                 'totalAmount' => $total_amount,
                 'frequency' => $frequency,
                 'numInstallments' => $num_installments,
+                'deadlineDate' => $deadline_date,
                 'installments' => $installments
             ], 200);
         }
@@ -840,6 +899,15 @@ class Smart_Dube_API {
                     'paid_amount' => 0.00,
                     'status' => 'PENDING'
                 ]);
+            }
+
+            // Synchronize the transaction's due_date to match the final installment date
+            if ($transaction_id) {
+                $last_inst = end($installments);
+                if (!empty($last_inst['dueDate'])) {
+                    $table_tx = $wpdb->prefix . 'dube_credit_transactions';
+                    $wpdb->update($table_tx, ['due_date' => sanitize_text_field($last_inst['dueDate'])], ['id' => $transaction_id]);
+                }
             }
         }
 
