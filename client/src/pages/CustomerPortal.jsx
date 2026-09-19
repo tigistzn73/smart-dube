@@ -40,6 +40,7 @@ export const CustomerPortal = () => {
   const [scheduleResult, setScheduleResult] = useState(null);
   const [selectedScheduleMerchant, setSelectedScheduleMerchant] = useState('ALL');
   const [selectedScheduleViewMerchant, setSelectedScheduleViewMerchant] = useState('ALL');
+  const [selectedScheduleTxId, setSelectedScheduleTxId] = useState('ALL');
 
   // Alerts Popover Modal State
   const [alertsOpen, setAlertsOpen] = useState(false);
@@ -84,13 +85,30 @@ export const CustomerPortal = () => {
   const [applyingSchedule, setApplyingSchedule] = useState(false);
 
   const handleGenerateSchedule = async () => {
-    let targetBalance = data?.summary?.totalBalance || 0;
-    const merchantIdForSchedule = selectedScheduleMerchant !== 'ALL' ? Number(selectedScheduleMerchant) : null;
-    if (selectedScheduleMerchant !== 'ALL') {
+    let targetBalance = summary.totalBalance || 0;
+    let chosenTx = null;
+    let targetDueDate = null;
+
+    if (selectedScheduleTxId !== 'ALL') {
+      chosenTx = transactions.find(t => String(t.id) === String(selectedScheduleTxId));
+      if (chosenTx) {
+        targetBalance = parseFloat(chosenTx.total_amount) || 0;
+        targetDueDate = chosenTx.due_date ? String(chosenTx.due_date).split('T')[0] : null;
+      }
+    } else if (selectedScheduleMerchant !== 'ALL') {
       const p = profiles.find(pr => String(pr.merchant_id) === String(selectedScheduleMerchant));
-      if (p) targetBalance = p.current_balance;
+      if (p) targetBalance = parseFloat(p.current_balance) || 0;
     }
-    if (!targetBalance) return;
+
+    if (!targetBalance || targetBalance <= 0) {
+      alert(t('No outstanding balance found for this selection.', 'ለዚህ ምርጫ ምንም ያልተከፈለ ቀሪ ሂሳብ የለም።'));
+      return;
+    }
+
+    const merchantIdForSchedule = chosenTx
+      ? Number(chosenTx.merchant_id)
+      : (selectedScheduleMerchant !== 'ALL' ? Number(selectedScheduleMerchant) : null);
+
     try {
       const res = await fetch('/api/customer/schedule', {
         method: 'POST',
@@ -102,24 +120,72 @@ export const CustomerPortal = () => {
           totalAmount: targetBalance,
           frequency,
           numInstallments,
-          merchantId: merchantIdForSchedule
+          startDate: targetDueDate || new Date().toISOString().split('T')[0],
+          merchantId: merchantIdForSchedule,
+          transactionId: chosenTx ? chosenTx.id : null
         })
       });
-      const sData = await res.json();
-      setScheduleResult(sData);
+
+      if (res.ok) {
+        const sData = await res.json();
+        if (sData.installments) {
+          setScheduleResult(sData);
+          return;
+        }
+      }
     } catch (err) {
-      alert(err.message);
+      console.warn('API schedule calculation fallback to client-side:', err);
     }
+
+    // Resilient client-side calculation fallback
+    const installments = [];
+    const baseInst = Math.round((targetBalance / numInstallments) * 100) / 100;
+    let cumulative = 0;
+    const baseDate = targetDueDate ? new Date(targetDueDate) : new Date();
+
+    for (let i = 1; i <= numInstallments; i++) {
+      const d = new Date(baseDate);
+      if (frequency === 'WEEKLY') {
+        d.setDate(d.getDate() + i * 7);
+      } else {
+        d.setMonth(d.getMonth() + i);
+      }
+      const dueStr = d.toISOString().split('T')[0];
+      const amt = i === numInstallments ? Math.round((targetBalance - cumulative) * 100) / 100 : baseInst;
+      cumulative += amt;
+      installments.push({
+        installmentNo: i,
+        dueDate: dueStr,
+        amount: amt,
+        status: 'PENDING'
+      });
+    }
+
+    setScheduleResult({
+      totalAmount: targetBalance,
+      frequency,
+      numInstallments,
+      installments
+    });
   };
 
   const handleApplySchedule = async () => {
-    let targetBalance = data?.summary?.totalBalance || 0;
-    const merchantIdForSchedule = selectedScheduleMerchant !== 'ALL' ? Number(selectedScheduleMerchant) : null;
-    if (selectedScheduleMerchant !== 'ALL') {
+    let targetBalance = summary.totalBalance || 0;
+    let chosenTx = null;
+
+    if (selectedScheduleTxId !== 'ALL') {
+      chosenTx = transactions.find(t => String(t.id) === String(selectedScheduleTxId));
+      if (chosenTx) targetBalance = parseFloat(chosenTx.total_amount) || 0;
+    } else if (selectedScheduleMerchant !== 'ALL') {
       const p = profiles.find(pr => String(pr.merchant_id) === String(selectedScheduleMerchant));
-      if (p) targetBalance = p.current_balance;
+      if (p) targetBalance = parseFloat(p.current_balance) || 0;
     }
+
     if (!targetBalance) return;
+    const merchantIdForSchedule = chosenTx
+      ? Number(chosenTx.merchant_id)
+      : (selectedScheduleMerchant !== 'ALL' ? Number(selectedScheduleMerchant) : null);
+
     try {
       setApplyingSchedule(true);
       const res = await fetch('/api/customer/schedule/apply', {
@@ -132,12 +198,16 @@ export const CustomerPortal = () => {
           totalAmount: targetBalance,
           frequency,
           numInstallments,
-          merchantId: merchantIdForSchedule
+          merchantId: merchantIdForSchedule,
+          customerId: chosenTx ? chosenTx.customer_id : undefined,
+          transactionId: chosenTx ? chosenTx.id : null,
+          transactionRef: chosenTx ? chosenTx.transaction_ref : null,
+          installments: scheduleResult?.installments || []
         })
       });
       const sData = await res.json();
       if (!res.ok) throw new Error(sData.error || 'Failed to apply schedule.');
-      alert('✓ Flexible Repayment Schedule applied successfully!');
+      alert(t('✓ Flexible Repayment Schedule applied successfully!', '✓ የክፍያ የጊዜ ሰሌዳው በተሳካ ሁኔታ ተተግብሯል!'));
       setScheduleModalOpen(false);
       setScheduleResult(null);
       fetchCustomerDashboard();
@@ -148,8 +218,18 @@ export const CustomerPortal = () => {
     }
   };
 
-  const openScheduleModal = () => {
+  const openScheduleModal = (merchantId = null, transactionId = null) => {
+    if (merchantId) {
+      setSelectedScheduleMerchant(String(merchantId));
+      setSelectedScheduleViewMerchant(String(merchantId));
+    }
+    if (transactionId) {
+      setSelectedScheduleTxId(String(transactionId));
+    } else {
+      setSelectedScheduleTxId('ALL');
+    }
     setNumInstallments(2);
+    setFrequency('WEEKLY');
     setScheduleResult(null);
     setScheduleModalOpen(true);
   };
@@ -194,8 +274,6 @@ export const CustomerPortal = () => {
   const pendingTransactions = transactions.filter(tx => tx.status !== 'SETTLED');
   const repayments = data?.repayments || [];
   const profiles = data?.profiles || [];
-  // activeSchedules: array of schedule blocks, one per transaction, each with installments[]
-  const activeSchedules = data?.activeSchedules || (data?.activeSchedule ? [data.activeSchedule] : []);
 
   const chartWidth = 500;
   const chartHeight = 150;
@@ -647,101 +725,81 @@ export const CustomerPortal = () => {
                     )}
                   </div>
 
-                  {/* Resolve and display per-transaction installment schedule blocks */}
+                  {/* Resolve current active schedule for the chosen store */}
                   {(() => {
+                    const allActiveSchedules = data?.activeSchedules || (data?.activeSchedule ? [data.activeSchedule] : []);
                     const activeMerchantId = (selectedScheduleViewMerchant && selectedScheduleViewMerchant !== 'ALL')
                       ? selectedScheduleViewMerchant
                       : (profiles[0] ? String(profiles[0].merchant_id) : '');
 
                     const profileForStore = profiles.find(p => String(p.merchant_id) === activeMerchantId) || profiles[0];
-
-                    // Filter schedules for this merchant
-                    const merchantSchedules = activeSchedules.filter(s =>
-                      !activeMerchantId || String(s.merchant_id) === activeMerchantId
+                    const currentViewSchedule = allActiveSchedules.find(s =>
+                      (profileForStore && String(s.merchant_id) === String(profileForStore.merchant_id)) ||
+                      (profileForStore && s.customer_id === profileForStore.id)
                     );
 
-                    if (merchantSchedules.length > 0) {
-                      return (
-                        <div className="mt-3 space-y-3">
-                          {merchantSchedules.map((sched, si) => {
-                            // Find the exact credit transaction this schedule belongs to
-                            const linkedTx = sched.transaction_id
-                              ? transactions.find(tx => tx.id === sched.transaction_id || String(tx.id) === String(sched.transaction_id))
-                              : null;
-                            const unpaidCount = sched.installments?.filter(i => i.status !== 'PAID').length || 0;
-                            const paidCount   = sched.installments?.filter(i => i.status === 'PAID').length || 0;
+                    const hasUnpaidInsts = currentViewSchedule && currentViewSchedule.installments?.some(i => i.status !== 'PAID');
 
-                            return (
-                              <div key={si} className="bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
-                                <div className="text-[11px] font-bold text-sky-400 flex justify-between items-center mb-2">
-                                  <span className="flex items-center gap-1.5">
-                                    <Store className="w-3.5 h-3.5" />
-                                    {sched.store_name || profileForStore?.store_name}
-                                    {linkedTx && (
-                                      <span className="text-[10px] text-slate-400 font-mono font-normal">
-                                        — {linkedTx.transaction_ref}
-                                      </span>
-                                    )}
-                                  </span>
-                                  <span className="text-[10px] text-slate-400 font-mono">
-                                    {paidCount} / {sched.installments?.length} {t('Paid', 'ተከፍሏል')}
-                                  </span>
-                                </div>
-                                {sched.installments?.map(inst => (
-                                  <div key={inst.installmentNo} className="flex justify-between items-center text-xs py-1.5 border-b border-slate-800/60 font-mono">
-                                    <div>
-                                      <span className="text-slate-200">{t('Inst', 'ክፍል')} #{inst.installmentNo} ({t('Due', 'ቀን')}: {inst.dueDate})</span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-amber-400 font-bold">{fmt(inst.amount)} ETB</span>
-                                      {inst.status === 'PAID' ? (
-                                        <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 font-bold">{t('PAID', 'ተከፍሏል')}</span>
-                                      ) : (
-                                        <button
-                                          onClick={() => {
-                                            // Use the exact linked transaction, or find best match
-                                            const targetTx = linkedTx
-                                              || transactions.find(tx => String(tx.id) === String(sched.transaction_id))
-                                              || transactions.find(tx => tx.merchant_id === sched.merchant_id && tx.status !== 'SETTLED')
-                                              || transactions.find(tx => tx.status !== 'SETTLED')
-                                              || transactions[0];
-                                            if (targetTx) {
-                                              setSelectedTxForPayment({
-                                                ...targetTx,
-                                                store_name: sched.store_name || targetTx.store_name,
-                                                merchant_id: sched.merchant_id || targetTx.merchant_id,
-                                                customer_id: sched.customer_id || targetTx.customer_id,
-                                                total_amount: inst.amount,
-                                                installmentNo: inst.installmentNo,
-                                                scheduleInstallmentId: inst.id
-                                              });
-                                            }
-                                          }}
-                                          className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold cursor-pointer transition-all"
-                                        >
-                                          {t('Pay', 'ክፈል')}
-                                        </button>
-                                      )}
-                                    </div>
-                                  </div>
-                                ))}
-                                <button
-                                  onClick={() => {
-                                    setSelectedScheduleMerchant(String(sched.merchant_id || profileForStore?.merchant_id || ''));
-                                    openScheduleModal();
-                                  }}
-                                  className="w-full mt-2 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-semibold transition-colors cursor-pointer"
-                                >
-                                  {t('Change / Customize Schedule', 'የጊዜ ሰሌዳውን ቀይር / አስተካክል')}
-                                </button>
+                    if (currentViewSchedule && hasUnpaidInsts) {
+                      return (
+                        <div className="mt-3 space-y-2 bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
+                          <div className="text-[11px] font-bold text-sky-400 flex justify-between items-center">
+                            <span>
+                              {t('Active Plan for', 'ለ')} {profileForStore?.store_name || currentViewSchedule.store_name}:
+                            </span>
+                            <span className="text-[10px] text-slate-400 font-mono">
+                              {currentViewSchedule.installments.filter(i => i.status === 'PAID').length} / {currentViewSchedule.installments.length} {t('Paid', 'ተከፍሏል')}
+                            </span>
+                          </div>
+                          {currentViewSchedule.installments.map(inst => (
+                            <div key={inst.installmentNo} className="flex justify-between items-center text-xs py-1.5 border-b border-slate-800/60 font-mono">
+                              <div>
+                                <span className="text-slate-200">{t('Inst', 'ክፍል')} #{inst.installmentNo} ({t('Due', 'ቀን')}: {inst.dueDate})</span>
                               </div>
-                            );
-                          })}
+                              <div className="flex items-center gap-2">
+                                <span className="text-amber-400 font-bold">{fmt(inst.amount)} ETB</span>
+                                {inst.status === 'PAID' ? (
+                                  <span className="px-2 py-0.5 rounded text-[10px] bg-emerald-500/20 text-emerald-400 font-bold">{t('PAID', 'ተከፍሏል')}</span>
+                                ) : (
+                                  <button
+                                    onClick={() => {
+                                      const targetTx = transactions.find(t => t.customer_id === profileForStore?.id && t.status !== 'SETTLED')
+                                        || transactions.find(t => t.merchant_id === profileForStore?.merchant_id && t.status !== 'SETTLED')
+                                        || transactions.find(t => t.status !== 'SETTLED')
+                                        || transactions[0];
+                                      if (targetTx) {
+                                        setSelectedTxForPayment({
+                                          ...targetTx,
+                                          store_name: profileForStore ? profileForStore.store_name : targetTx.store_name,
+                                          merchant_id: profileForStore ? profileForStore.merchant_id : targetTx.merchant_id,
+                                          customer_id: profileForStore ? profileForStore.id : targetTx.customer_id,
+                                          total_amount: inst.amount,
+                                          installmentNo: inst.installmentNo
+                                        });
+                                      }
+                                    }}
+                                    className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold cursor-pointer transition-all"
+                                  >
+                                    {t('Pay', 'ክፈል')}
+                                  </button>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                          <button
+                            onClick={() => {
+                              setSelectedScheduleMerchant(String(profileForStore?.merchant_id || ''));
+                              openScheduleModal();
+                            }}
+                            className="w-full mt-1 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-[10px] font-semibold transition-colors cursor-pointer"
+                          >
+                            {t('Change / Customize Schedule', 'የጊዜ ሰሌዳውን ቀይር / አስተካክል')}
+                          </button>
                         </div>
                       );
                     }
 
-                    // No schedule for this store yet
+                    // No schedule for this specific selected store yet
                     return (
                       <div className="mt-4 p-4 rounded-xl bg-slate-900/80 border border-slate-800/80 text-center space-y-2.5">
                         <p className="text-xs text-slate-300 font-medium">
@@ -821,13 +879,24 @@ export const CustomerPortal = () => {
                             </div>
 
                             {tx.status !== 'SETTLED' && (
-                              <button
-                                onClick={() => setSelectedTxForPayment(tx)}
-                                className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 flex items-center gap-1.5 transition-all cursor-pointer"
-                              >
-                                <CreditCard className="w-3.5 h-3.5" />
-                                <span>{t('Pay Debt', 'ዕዳ ክፈል')}</span>
-                              </button>
+                              <div className="flex items-center gap-2">
+                                <button
+                                  onClick={() => openScheduleModal(tx.merchant_id, tx.id)}
+                                  className="px-3 py-2 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-sky-400 hover:text-sky-300 text-xs font-bold border border-slate-700/80 flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                                  title={t('Create installment schedule for this Dube purchase', 'ለዚህ የዱቤ ግዢ የክፍያ የጊዜ ሰሌዳ አውጣ')}
+                                >
+                                  <Clock className="w-3.5 h-3.5 text-sky-400" />
+                                  <span>{t('Schedule', 'የጊዜ ሰሌዳ')}</span>
+                                </button>
+
+                                <button
+                                  onClick={() => setSelectedTxForPayment(tx)}
+                                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 flex items-center gap-1.5 transition-all cursor-pointer"
+                                >
+                                  <CreditCard className="w-3.5 h-3.5" />
+                                  <span>{t('Pay Debt', 'ዕዳ ክፈል')}</span>
+                                </button>
+                              </div>
                             )}
                           </div>
                         </div>
@@ -969,39 +1038,114 @@ export const CustomerPortal = () => {
                 );
               })()}
 
-              {/* 1. Current Dube Balance */}
+              {/* 1. Choose Dube Purchase / Receipt to Schedule */}
+              <div className="space-y-2">
+                <label className="block text-xs font-bold text-slate-200 mb-1 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5">
+                    <Receipt className="w-3.5 h-3.5 text-emerald-400" />
+                    {t('Choose Dube Purchase / Receipt to Schedule:', 'የሚከፈልበትን የዱቤ ግዢ ይምረጡ፦')}
+                  </span>
+                  {selectedScheduleTxId !== 'ALL' && (
+                    <span className="text-[10px] text-sky-400 font-mono font-bold bg-sky-500/10 px-2 py-0.5 rounded-full border border-sky-500/20">
+                      {t('Specific Receipt Mode', 'ነጠላ ደረሰኝ')}
+                    </span>
+                  )}
+                </label>
+
+                <select
+                  value={selectedScheduleTxId}
+                  onChange={e => {
+                    setSelectedScheduleTxId(e.target.value);
+                    setScheduleResult(null);
+                  }}
+                  className="w-full bg-slate-900 border border-slate-700 rounded-xl px-3 py-2.5 text-xs text-slate-100 font-semibold focus:border-sky-500 outline-none"
+                >
+                  <option value="ALL">
+                    🌐 {t('All Dube Debts Combined', 'ሁሉንም የዱቤ ዕዳዎች በጋራ')} ({fmt(
+                      selectedScheduleMerchant !== 'ALL'
+                        ? (profiles.find(p => String(p.merchant_id) === String(selectedScheduleMerchant))?.current_balance || summary.totalBalance)
+                        : summary.totalBalance
+                    )} ETB)
+                  </option>
+
+                  {transactions
+                    .filter(t => t.status !== 'SETTLED' && (selectedScheduleMerchant === 'ALL' || String(t.merchant_id) === String(selectedScheduleMerchant)))
+                    .map(tx => {
+                      const rawItems = tx.items || (typeof tx.items_json === 'string' ? (() => { try { return JSON.parse(tx.items_json); } catch { return []; } })() : []);
+                      const itemNames = Array.isArray(rawItems) && rawItems.length > 0
+                        ? rawItems.map(it => `${it.quantity || 1}x ${it.name}`).join(', ')
+                        : '';
+
+                      return (
+                        <option key={tx.id} value={String(tx.id)}>
+                          📌 {tx.transaction_ref} • {fmt(tx.total_amount)} ETB • {t('Due', 'ቀን')}: {tx.due_date ? String(tx.due_date).split('T')[0] : 'N/A'}{itemNames ? ` — ${itemNames}` : ''}
+                        </option>
+                      );
+                    })}
+                </select>
+              </div>
+
+              {/* Selected Purchase Info Card */}
               {(() => {
-                let displayBalance = summary.totalBalance;
-                let storeLabel = `Total across all ${summary.activeAccountsCount || 1} stores`;
-                let selectedTx = transactions[0];
-                if (selectedScheduleMerchant !== 'ALL') {
-                  const selectedP = profiles.find(pr => String(pr.merchant_id) === String(selectedScheduleMerchant));
-                  if (selectedP) {
-                    displayBalance = selectedP.current_balance;
-                    storeLabel = selectedP.store_name;
-                    selectedTx = transactions.find(t => t.merchant_id === selectedP.merchant_id) || transactions[0];
+                const chosenTx = selectedScheduleTxId !== 'ALL'
+                  ? transactions.find(t => String(t.id) === String(selectedScheduleTxId))
+                  : null;
+
+                let displayAmount = summary.totalBalance;
+                let deadline = null;
+                let itemsList = [];
+                let label = t('All stores debt combined', 'የሁሉም ሱቆች ድምር');
+
+                if (chosenTx) {
+                  displayAmount = parseFloat(chosenTx.total_amount) || 0;
+                  deadline = chosenTx.due_date ? String(chosenTx.due_date).split('T')[0] : 'N/A';
+                  itemsList = chosenTx.items || (typeof chosenTx.items_json === 'string' ? (() => { try { return JSON.parse(chosenTx.items_json); } catch { return []; } })() : []);
+                  label = `${chosenTx.transaction_ref} (${chosenTx.store_name || 'Store'})`;
+                } else if (selectedScheduleMerchant !== 'ALL') {
+                  const p = profiles.find(pr => String(pr.merchant_id) === String(selectedScheduleMerchant));
+                  if (p) {
+                    displayAmount = parseFloat(p.current_balance) || 0;
+                    label = p.store_name;
                   }
+                  const firstTx = transactions.find(t => t.status !== 'SETTLED' && String(t.merchant_id) === String(selectedScheduleMerchant));
+                  deadline = firstTx?.due_date ? String(firstTx.due_date).split('T')[0] : 'N/A';
+                } else {
+                  const firstTx = transactions.find(t => t.status !== 'SETTLED');
+                  deadline = firstTx?.due_date ? String(firstTx.due_date).split('T')[0] : 'N/A';
                 }
+
                 return (
-                  <>
-                    <div>
-                      <div className="flex justify-between items-center mb-1">
-                        <label className="block text-xs font-bold text-slate-300">{t('Current Dube Balance:', 'የአሁኑ የዱቤ ቀሪ ሂሳብ፦')}</label>
-                        <span className="text-[10px] text-slate-400 font-sans">({storeLabel})</span>
-                      </div>
-                      <div className="bg-slate-900 px-3 py-2.5 rounded-xl border border-slate-800 text-sm font-extrabold text-amber-400">
-                        {fmt(displayBalance)} ETB
-                      </div>
+                  <div className="bg-slate-900/90 p-3.5 rounded-xl border border-slate-800 space-y-2">
+                    <div className="flex justify-between items-center text-xs">
+                      <span className="text-slate-400 font-semibold">{t('Scheduled Debt Target:', 'የታቀደው የዱቤ ሂሳብ፦')}</span>
+                      <span className="text-xs font-mono font-bold text-sky-400 truncate max-w-[200px]">{label}</span>
                     </div>
 
-                    {/* Current Dube Repayment Deadline */}
-                    <div>
-                      <label className="block text-xs font-bold text-slate-300 mb-1">{t('Current Dube Repayment Deadline:', 'የዱቤ መክፈያ የጊዜ ገደብ፦')}</label>
-                      <div className="bg-slate-900 px-3 py-2.5 rounded-xl border border-slate-800 text-sm font-extrabold text-emerald-400 font-mono">
-                        {selectedTx?.due_date ? String(selectedTx.due_date).split('T')[0] : 'N/A'}
-                      </div>
+                    <div className="flex justify-between items-center text-xs pt-1.5 border-t border-slate-800/80">
+                      <span className="text-slate-400 font-semibold">{t('Amount to Pay by Schedule:', 'በሰሌዳ የሚከፈል መጠን፦')}</span>
+                      <span className="text-base font-black text-amber-400 font-mono">{fmt(displayAmount)} ETB</span>
                     </div>
-                  </>
+
+                    <div className="flex justify-between items-center text-xs pt-1.5 border-t border-slate-800/80">
+                      <span className="text-slate-400 font-semibold">{t('Original Repayment Deadline:', 'የመጀመሪያው የመክፈያ ቀን፦')}</span>
+                      <span className="text-xs font-mono font-bold text-emerald-400">{deadline || 'N/A'}</span>
+                    </div>
+
+                    {chosenTx && Array.isArray(itemsList) && itemsList.length > 0 && (
+                      <div className="pt-2 border-t border-slate-800/80">
+                        <span className="text-[10px] text-slate-400 font-bold block mb-1">
+                          {t('Itemized Breakdown for this Dube:', 'የዚህ ዱቤ ዕቃዎች ዝርዝር፦')}
+                        </span>
+                        <div className="flex flex-wrap gap-1.5">
+                          {itemsList.map((it, idx) => (
+                            <span key={idx} className="px-2 py-0.5 rounded bg-slate-950 text-[10px] text-slate-200 border border-slate-800 font-mono">
+                              {it.quantity || 1}x {it.name} {it.total ? `(${fmt(it.total)} ETB)` : ''}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 );
               })()}
 

@@ -564,27 +564,12 @@ class Smart_Dube_API {
         $repayment_id = intval($params['repaymentId'] ?? 0);
 
         $table_rep = $wpdb->prefix . 'dube_repayments';
-        $table_cp  = $wpdb->prefix . 'dube_customer_profiles';
-        $table_tx  = $wpdb->prefix . 'dube_credit_transactions';
+        $table_cp = $wpdb->prefix . 'dube_customer_profiles';
 
         $repayment = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_rep WHERE id = %d", $repayment_id), ARRAY_A);
         if ($repayment) {
             $wpdb->update($table_rep, ['status' => 'COMPLETED'], ['id' => $repayment_id]);
-            $wpdb->query($wpdb->prepare("UPDATE $table_cp SET current_balance = GREATEST(0, current_balance - %f) WHERE id = %d", floatval($repayment['amount']), $repayment['customer_id']));
-
-            // If this repayment is linked to a specific credit transaction, check if it's fully settled
-            if (!empty($repayment['transaction_id'])) {
-                $tx = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_tx WHERE id = %d", intval($repayment['transaction_id'])), ARRAY_A);
-                if ($tx) {
-                    $paid_so_far = floatval($wpdb->get_var($wpdb->prepare(
-                        "SELECT COALESCE(SUM(amount),0) FROM $table_rep WHERE transaction_id = %d AND status = 'COMPLETED'",
-                        intval($repayment['transaction_id'])
-                    )));
-                    if ($paid_so_far >= floatval($tx['total_amount'])) {
-                        $wpdb->update($table_tx, ['status' => 'SETTLED'], ['id' => intval($repayment['transaction_id'])]);
-                    }
-                }
-            }
+            $wpdb->query($wpdb->prepare("UPDATE $table_cp SET current_balance = GREATEST(0, current_balance - %f) WHERE id = %d", $repayment['amount'], $repayment['customer_id']));
         }
 
         return new WP_REST_Response(['message' => 'Repayment approved successfully'], 200);
@@ -675,302 +660,192 @@ class Smart_Dube_API {
         }
         $available_credit = max(0, $total_limit - $total_balance);
 
-        return new WP_REST_Response([
-            'profiles'       => $profiles ? $profiles : [],
-            'summary'        => [
-                'totalCreditLimit'   => $total_limit,
-                'totalBalance'       => $total_balance,
-                'availableCredit'    => $available_credit,
-                'activeAccountsCount'=> is_array($profiles) ? count($profiles) : 0
-            ],
-            'transactions'   => $transactions,
-            'repayments'     => $repayments,
-            'activeSchedules'=> self::get_active_schedules_for_customer($user_id, $user ? $user['phone'] : '')
-        ], 200);
-    }
-
-    // Helper: fetch all active installment schedules for a customer across all merchants
-    private static function get_active_schedules_for_customer($user_id, $phone = '') {
-        global $wpdb;
-        $table_cp        = $wpdb->prefix . 'dube_customer_profiles';
+        // Fetch active installment schedules for this customer
         $table_schedules = $wpdb->prefix . 'dube_installment_schedules';
-        $table_merchants = $wpdb->prefix . 'dube_merchants';
-        $table_tx        = $wpdb->prefix . 'dube_credit_transactions';
+        $schedules_rows = $wpdb->get_results($wpdb->prepare(
+            "SELECT s.*, m.store_name, tx.transaction_ref, tx.items_json 
+             FROM $table_schedules s 
+             LEFT JOIN $table_merchants m ON s.merchant_id = m.id 
+             LEFT JOIN $table_tx tx ON s.transaction_id = tx.id 
+             WHERE s.customer_id IN (SELECT id FROM $table_cp WHERE user_id = %d OR phone = %s) 
+             ORDER BY s.due_date ASC",
+            $user_id,
+            $user ? $user['phone'] : ''
+        ), ARRAY_A);
 
-        // Find all customer profile IDs for this user
-        $profile_ids = $wpdb->get_col($wpdb->prepare(
-            "SELECT id FROM $table_cp WHERE user_id = %d OR phone = %s",
-            $user_id, $phone
-        ));
-        if (empty($profile_ids)) return [];
-
-        $id_list = implode(',', array_map('intval', $profile_ids));
-
-        // Fetch all schedule rows
-        $rows = $wpdb->get_results(
-            "SELECT s.*, m.store_name 
-             FROM $table_schedules s
-             LEFT JOIN $table_merchants m ON s.merchant_id = m.id
-             WHERE s.customer_id IN ($id_list)
-             ORDER BY s.merchant_id, s.transaction_id, s.installment_number ASC",
-            ARRAY_A
-        );
-        if (empty($rows)) return [];
-
-        // Group by transaction_id (each credit transaction gets its own schedule block)
-        $grouped = [];
-        foreach ($rows as $row) {
-            $key = $row['transaction_id'] ? 'tx_' . $row['transaction_id'] : 'cp_' . $row['customer_id'] . '_merch_' . $row['merchant_id'];
-            if (!isset($grouped[$key])) {
-                $grouped[$key] = [
-                    'transaction_id' => $row['transaction_id'],
-                    'customer_id'    => $row['customer_id'],
-                    'merchant_id'    => $row['merchant_id'],
-                    'store_name'     => $row['store_name'],
-                    'installments'   => []
+        $active_schedules = [];
+        if (!empty($schedules_rows)) {
+            $grouped = [];
+            foreach ($schedules_rows as $row) {
+                $group_key = !empty($row['transaction_id']) ? 'tx_' . $row['transaction_id'] : 'merchant_' . $row['merchant_id'];
+                if (!isset($grouped[$group_key])) {
+                    $grouped[$group_key] = [
+                        'id' => $group_key,
+                        'transaction_id' => $row['transaction_id'] ? intval($row['transaction_id']) : null,
+                        'transaction_ref' => $row['transaction_ref'] ?? null,
+                        'merchant_id' => intval($row['merchant_id']),
+                        'customer_id' => intval($row['customer_id']),
+                        'store_name' => $row['store_name'] ?? 'Merchant Store',
+                        'installments' => []
+                    ];
+                }
+                $grouped[$group_key]['installments'][] = [
+                    'id' => intval($row['id']),
+                    'installmentNo' => intval($row['installment_number']),
+                    'dueDate' => $row['due_date'],
+                    'amount' => floatval($row['amount']),
+                    'paidAmount' => floatval($row['paid_amount']),
+                    'status' => $row['status']
                 ];
             }
-            $grouped[$key]['installments'][] = [
-                'installmentNo' => intval($row['installment_number']),
-                'dueDate'       => $row['due_date'],
-                'amount'        => floatval($row['amount']),
-                'paidAmount'    => floatval($row['paid_amount']),
-                'status'        => $row['status'],
-                'id'            => intval($row['id'])
-            ];
+            $active_schedules = array_values($grouped);
         }
-        return array_values($grouped);
+
+        return new WP_REST_Response([
+            'profiles' => $profiles ? $profiles : [],
+            'summary' => [
+                'totalCreditLimit' => $total_limit,
+                'totalBalance' => $total_balance,
+                'availableCredit' => $available_credit,
+                'activeAccountsCount' => is_array($profiles) ? count($profiles) : 0
+            ],
+            'transactions' => $transactions,
+            'repayments' => $repayments,
+            'activeSchedules' => $active_schedules,
+            'activeSchedule' => !empty($active_schedules) ? $active_schedules[0] : null
+        ], 200);
     }
 
     // 10. Customer Repay
     public static function customer_repay($request) {
         global $wpdb;
         $params = $request->get_json_params();
-        $table_rep   = $wpdb->prefix . 'dube_repayments';
-        $table_tx    = $wpdb->prefix . 'dube_credit_transactions';
-        $table_cp    = $wpdb->prefix . 'dube_customer_profiles';
-        $table_merch = $wpdb->prefix . 'dube_merchants';
-
-        $transaction_id = intval($params['transactionId'] ?? 0);
-        $customer_id    = intval($params['customerId'] ?? 0);
-        $amount         = floatval($params['amount'] ?? 0);
-
-        // Derive merchant_id from the linked credit transaction when not supplied
-        $merchant_id = intval($params['merchantId'] ?? 0);
-        if (!$merchant_id && $transaction_id) {
-            $tx_row = $wpdb->get_row($wpdb->prepare("SELECT merchant_id FROM $table_tx WHERE id = %d", $transaction_id), ARRAY_A);
-            if ($tx_row) $merchant_id = intval($tx_row['merchant_id']);
-        }
-
-        $is_receipt_upload = (sanitize_text_field($params['paymentGateway'] ?? '') === 'RECEIPT_UPLOAD');
-        $status = $is_receipt_upload ? 'PENDING' : 'PENDING'; // always PENDING until merchant approves
+        $table_rep = $wpdb->prefix . 'dube_repayments';
 
         $rep_ref = 'PAY-' . strtoupper(wp_generate_password(6, false));
+        $wpdb->insert($table_rep, [
+            'repayment_ref' => $rep_ref,
+            'customer_id' => intval($params['customerId']),
+            'merchant_id' => intval($params['merchantId']),
+            'amount' => floatval($params['amount']),
+            'payment_gateway' => sanitize_text_field($params['paymentGateway']),
+            'reference_code' => sanitize_text_field($params['referenceCode']),
+            'receipt_url' => sanitize_text_field($params['receiptUrl'] ?? null),
+            'status' => 'PENDING'
+        ]);
 
-        $insert_data = [
-            'repayment_ref'   => $rep_ref,
-            'customer_id'     => $customer_id,
-            'merchant_id'     => $merchant_id,
-            'amount'          => $amount,
-            'payment_gateway' => sanitize_text_field($params['paymentGateway'] ?? 'TELEBIRR'),
-            'reference_code'  => sanitize_text_field($params['referenceCode'] ?? ''),
-            'receipt_url'     => sanitize_text_field($params['receiptUrl'] ?? ''),
-            'status'          => $status
-        ];
-        // Link to specific transaction if provided
-        if ($transaction_id) {
-            $insert_data['transaction_id'] = $transaction_id;
-        }
-        $wpdb->insert($table_rep, $insert_data);
-        $repayment_row_id = $wpdb->insert_id;
-
-        // Fetch store name for receipt
-        $store_name = '';
-        if ($merchant_id) {
-            $merch = $wpdb->get_row($wpdb->prepare("SELECT store_name FROM $table_merch WHERE id = %d", $merchant_id), ARRAY_A);
-            if ($merch) $store_name = $merch['store_name'];
-        }
-
-        $receipt = [
-            'repaymentRef'  => $rep_ref,
-            'gateway'       => sanitize_text_field($params['paymentGateway'] ?? ''),
-            'referenceCode' => sanitize_text_field($params['referenceCode'] ?? ''),
-            'amount'        => $amount,
-            'status'        => $status,
-            'storeName'     => $store_name,
-            'transactionId' => $transaction_id ?: null,
-        ];
-
-        return new WP_REST_Response([
-            'message'      => 'Payment receipt submitted successfully',
-            'repaymentRef' => $rep_ref,
-            'receipt'      => $receipt
-        ], 201);
+        return new WP_REST_Response(['message' => 'Payment receipt submitted successfully', 'repaymentRef' => $rep_ref], 201);
     }
 
     // 11. Customer Schedule Endpoints
-    // GET: return active schedules for this customer | POST: preview a schedule without saving
     public static function handle_customer_schedule($request) {
         global $wpdb;
-        $user = self::get_authenticated_user($request);
-        $user_id = $user ? $user['id'] : 0;
-        $phone   = $user ? $user['phone'] : '';
+        $table_schedules = $wpdb->prefix . 'dube_installment_schedules';
 
-        if ($request->get_method() === 'GET') {
-            $schedules = self::get_active_schedules_for_customer($user_id, $phone);
-            return new WP_REST_Response(['schedules' => $schedules, 'activeSchedules' => $schedules], 200);
-        }
+        if ($request->get_method() === 'POST') {
+            $params = $request->get_json_params();
+            $total_amount = floatval($params['totalAmount'] ?? 0);
+            $frequency = strtoupper(sanitize_text_field($params['frequency'] ?? 'WEEKLY'));
+            $num_installments = max(1, intval($params['numInstallments'] ?? 2));
+            $start_date = !empty($params['startDate']) ? sanitize_text_field($params['startDate']) : date('Y-m-d');
 
-        // POST: preview installment plan (do NOT save yet)
-        $params          = $request->get_json_params();
-        $total_amount    = floatval($params['totalAmount']   ?? 0);
-        $num_installments= max(1, intval($params['numInstallments'] ?? 2));
-        $frequency       = strtoupper(sanitize_text_field($params['frequency'] ?? 'WEEKLY'));
-        $merchant_id     = intval($params['merchantId'] ?? 0);
-
-        if ($total_amount <= 0) {
-            return new WP_REST_Response(['error' => 'Total amount must be greater than 0'], 400);
-        }
-
-        $installment_amount = round($total_amount / $num_installments, 2);
-        $preview = [];
-        $start_date = new DateTime();
-        for ($i = 1; $i <= $num_installments; $i++) {
-            if ($i > 1) {
-                if ($frequency === 'MONTHLY') $start_date->modify('+1 month');
-                else $start_date->modify('+1 week');
+            if ($total_amount <= 0) {
+                return new WP_REST_Response(['error' => 'Valid debt amount is required to calculate schedule.'], 400);
             }
-            $preview[] = [
-                'installmentNo' => $i,
-                'dueDate'       => $start_date->format('Y-m-d'),
-                'amount'        => ($i === $num_installments)
-                    ? round($total_amount - $installment_amount * ($num_installments - 1), 2)
-                    : $installment_amount,
-                'status'        => 'PENDING'
-            ];
+
+            $installments = [];
+            $base_installment = round($total_amount / $num_installments, 2);
+            $cumulative = 0;
+
+            for ($i = 1; $i <= $num_installments; $i++) {
+                if ($frequency === 'WEEKLY') {
+                    $due_date = date('Y-m-d', strtotime("+{$i} week", strtotime($start_date)));
+                } else {
+                    $due_date = date('Y-m-d', strtotime("+{$i} month", strtotime($start_date)));
+                }
+
+                if ($i === $num_installments) {
+                    $inst_amount = round($total_amount - $cumulative, 2);
+                } else {
+                    $inst_amount = $base_installment;
+                    $cumulative += $inst_amount;
+                }
+
+                $installments[] = [
+                    'installmentNo' => $i,
+                    'dueDate' => $due_date,
+                    'amount' => $inst_amount,
+                    'status' => 'PENDING'
+                ];
+            }
+
+            return new WP_REST_Response([
+                'totalAmount' => $total_amount,
+                'frequency' => $frequency,
+                'numInstallments' => $num_installments,
+                'installments' => $installments
+            ], 200);
         }
 
-        return new WP_REST_Response([
-            'preview'         => $preview,
-            'installments'    => $preview,
-            'totalAmount'     => $total_amount,
-            'numInstallments' => $num_installments,
-            'frequency'       => $frequency
-        ], 200);
+        $schedules = $wpdb->get_results("SELECT * FROM $table_schedules ORDER BY due_date ASC", ARRAY_A);
+        return new WP_REST_Response(['schedules' => $schedules], 200);
     }
 
-    // POST /customer/schedule/apply — save installment schedule to DB per-transaction
     public static function apply_customer_schedule($request) {
         global $wpdb;
         $user = self::get_authenticated_user($request);
         $user_id = $user ? $user['id'] : 0;
-        $phone   = $user ? $user['phone'] : '';
 
-        $params           = $request->get_json_params();
-        $total_amount     = floatval($params['totalAmount']    ?? 0);
-        $num_installments = max(1, intval($params['numInstallments'] ?? 2));
-        $frequency        = strtoupper(sanitize_text_field($params['frequency'] ?? 'WEEKLY'));
-        $merchant_id      = intval($params['merchantId'] ?? 0);
-
-        if ($total_amount <= 0) {
-            return new WP_REST_Response(['error' => 'Total amount must be greater than 0'], 400);
-        }
-
-        $table_cp        = $wpdb->prefix . 'dube_customer_profiles';
-        $table_tx        = $wpdb->prefix . 'dube_credit_transactions';
+        $params = $request->get_json_params();
         $table_schedules = $wpdb->prefix . 'dube_installment_schedules';
+        $table_cp = $wpdb->prefix . 'dube_customer_profiles';
 
-        // Find all pending credit transactions for this customer (for the selected merchant or all)
-        $profile_ids = $wpdb->get_col($wpdb->prepare(
-            "SELECT id FROM $table_cp WHERE user_id = %d OR phone = %s",
-            $user_id, $phone
-        ));
-        if (empty($profile_ids)) {
-            return new WP_REST_Response(['error' => 'No customer profile found'], 404);
+        $customer_id = intval($params['customerId'] ?? 0);
+        $merchant_id = intval($params['merchantId'] ?? 0);
+        $transaction_id = !empty($params['transactionId']) ? intval($params['transactionId']) : null;
+        $installments = $params['installments'] ?? [];
+
+        if (!$customer_id && $user_id) {
+            $customer_id = intval($wpdb->get_var($wpdb->prepare("SELECT id FROM $table_cp WHERE user_id = %d LIMIT 1", $user_id)));
         }
 
-        $id_list = implode(',', array_map('intval', $profile_ids));
-
-        // Get pending transactions for the selected merchant (or all)
-        if ($merchant_id) {
-            $pending_txs = $wpdb->get_results(
-                $wpdb->prepare(
-                    "SELECT * FROM $table_tx WHERE customer_id IN ($id_list) AND merchant_id = %d AND status != 'SETTLED' ORDER BY id ASC",
-                    $merchant_id
-                ), ARRAY_A
-            );
-            // Also find the customer_id for this merchant profile
-            $cp_row = $wpdb->get_row($wpdb->prepare(
-                "SELECT id FROM $table_cp WHERE (user_id = %d OR phone = %s) AND merchant_id = %d LIMIT 1",
-                $user_id, $phone, $merchant_id
-            ), ARRAY_A);
-            $schedule_customer_id = $cp_row ? intval($cp_row['id']) : (empty($profile_ids) ? 0 : intval($profile_ids[0]));
-        } else {
-            $pending_txs = $wpdb->get_results(
-                "SELECT * FROM $table_tx WHERE customer_id IN ($id_list) AND status != 'SETTLED' ORDER BY id ASC",
-                ARRAY_A
-            );
-            $schedule_customer_id = intval($profile_ids[0]);
+        if (!$merchant_id && $transaction_id) {
+            $table_tx = $wpdb->prefix . 'dube_credit_transactions';
+            $merchant_id = intval($wpdb->get_var($wpdb->prepare("SELECT merchant_id FROM $table_tx WHERE id = %d", $transaction_id)));
         }
 
-        if (empty($pending_txs)) {
-            return new WP_REST_Response(['error' => 'No pending Dube transactions found to schedule'], 404);
+        // Delete previous pending installments for this transaction or merchant to avoid duplicate schedule entries
+        if ($transaction_id) {
+            $wpdb->query($wpdb->prepare(
+                "DELETE FROM $table_schedules WHERE transaction_id = %d AND status = 'PENDING'", 
+                $transaction_id
+            ));
+        } elseif ($customer_id && $merchant_id) {
+            $wpdb->query($wpdb->prepare(
+                "DELETE FROM $table_schedules WHERE customer_id = %d AND merchant_id = %d AND (transaction_id IS NULL OR transaction_id = 0) AND status = 'PENDING'", 
+                $customer_id, 
+                $merchant_id
+            ));
         }
 
-        $created_schedules = [];
-
-        foreach ($pending_txs as $tx) {
-            $tx_amount     = floatval($tx['total_amount']);
-            $tx_id         = intval($tx['id']);
-            $tx_merchant   = intval($tx['merchant_id']);
-            $tx_customer   = intval($tx['customer_id']);
-            $tx_due        = $tx['due_date'] ? new DateTime($tx['due_date']) : new DateTime('+14 days');
-
-            // Delete any old schedule rows for this transaction
-            $wpdb->delete($table_schedules, ['transaction_id' => $tx_id]);
-
-            $inst_amount = round($tx_amount / $num_installments, 2);
-            $start_date  = new DateTime(); // start from today
-
-            for ($i = 1; $i <= $num_installments; $i++) {
-                if ($i > 1) {
-                    if ($frequency === 'MONTHLY') $start_date->modify('+1 month');
-                    else $start_date->modify('+1 week');
-                }
-                // Don't schedule past the due date
-                $due = clone $start_date;
-                if ($due > $tx_due) $due = clone $tx_due;
-
-                $amount_this = ($i === $num_installments)
-                    ? round($tx_amount - $inst_amount * ($num_installments - 1), 2)
-                    : $inst_amount;
-
+        if (!empty($installments) && is_array($installments)) {
+            foreach ($installments as $inst) {
                 $wpdb->insert($table_schedules, [
-                    'transaction_id'     => $tx_id,
-                    'customer_id'        => $tx_customer,
-                    'merchant_id'        => $tx_merchant,
-                    'installment_number' => $i,
-                    'due_date'           => $due->format('Y-m-d'),
-                    'amount'             => $amount_this,
-                    'paid_amount'        => 0.00,
-                    'status'             => 'PENDING'
+                    'transaction_id' => $transaction_id,
+                    'customer_id' => $customer_id,
+                    'merchant_id' => $merchant_id,
+                    'installment_number' => intval($inst['installmentNo'] ?? 1),
+                    'due_date' => sanitize_text_field($inst['dueDate'] ?? date('Y-m-d')),
+                    'amount' => floatval($inst['amount'] ?? 0),
+                    'paid_amount' => 0.00,
+                    'status' => 'PENDING'
                 ]);
-
-                $created_schedules[] = [
-                    'transactionId' => $tx_id,
-                    'installmentNo' => $i,
-                    'dueDate'       => $due->format('Y-m-d'),
-                    'amount'        => $amount_this,
-                    'status'        => 'PENDING'
-                ];
             }
         }
 
         return new WP_REST_Response([
-            'message'          => 'Installment schedule applied successfully',
-            'scheduledCount'   => count($created_schedules),
-            'schedules'        => $created_schedules,
-            'activeSchedules'  => self::get_active_schedules_for_customer($user_id, $phone)
+            'message' => 'Flexible Repayment Schedule applied successfully',
+            'success' => true
         ], 200);
     }
 
