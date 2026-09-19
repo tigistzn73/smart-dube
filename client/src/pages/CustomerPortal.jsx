@@ -1235,51 +1235,17 @@ export const CustomerPortal = () => {
 
                 return (
                   <div className="space-y-1.5 pt-1">
-                    <label className="block text-xs font-bold text-slate-300">
+                    <label className="block text-xs font-bold text-slate-200">
                       {t('Schedule Strategy based on Deadline:', 'በቀነ ገደቡ ላይ የተመሰረተ የመክፈያ ስልት፦')}
                     </label>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setScheduleMode('DEADLINE');
-                          setScheduleResult(null);
-                        }}
-                        className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                          scheduleMode === 'DEADLINE'
-                            ? 'bg-emerald-500/10 border-emerald-500/50 text-emerald-300'
-                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
-                        }`}
-                      >
-                        <div className="text-xs font-bold flex items-center gap-1.5">
-                          <span>🎯</span>
-                          <span>{t('Match Deadline', 'ከቀነ ገደቡ ጋር አዛምድ')}</span>
-                        </div>
-                        <p className="text-[10px] text-slate-400 mt-0.5">
-                          {t(`Concludes on ${dDate}`, `በ ${dDate} ይጠናቀቃል`)}
-                        </p>
-                      </button>
-
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setScheduleMode('EXTEND');
-                          setScheduleResult(null);
-                        }}
-                        className={`p-2.5 rounded-xl border text-left transition-all cursor-pointer ${
-                          scheduleMode === 'EXTEND'
-                            ? 'bg-sky-500/10 border-sky-500/50 text-sky-300'
-                            : 'bg-slate-900 border-slate-800 text-slate-400 hover:border-slate-700'
-                        }`}
-                      >
-                        <div className="text-xs font-bold flex items-center gap-1.5">
-                          <span>📅</span>
-                          <span>{t('Extend Beyond Deadline', 'ከቀነ ገደቡ በላይ አራዝም')}</span>
-                        </div>
-                        <p className="text-[10px] text-slate-400 mt-0.5">
-                          {t('Forward into future weeks', 'ወደ ፊት ሳምንታት የሚራዘም')}
-                        </p>
-                      </button>
+                    <div className="w-full p-3 rounded-2xl bg-amber-400 text-slate-900 border border-amber-300 shadow-sm">
+                      <div className="text-xs sm:text-sm font-bold flex items-center gap-1.5 text-slate-900">
+                        <span>🎯</span>
+                        <span>{t('Match Deadline', 'ከቀነ ገደቡ ጋር አዛምድ')}</span>
+                      </div>
+                      <p className="text-[11px] text-slate-700 font-medium mt-0.5">
+                        {t(`Concludes on ${dDate}`, `በ ${dDate} ይጠናቀቃል`)}
+                      </p>
                     </div>
                   </div>
                 );
