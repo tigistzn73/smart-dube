@@ -161,84 +161,86 @@ export const CustomerPortal = () => {
       console.warn('API schedule calculation fallback to client-side:', err);
     }
 
-    // Accurate client-side calculation matching the deadline
+    // ----------------------------------------------------------------
+    // CLIENT-SIDE FALLBACK: Exact replica of Node.js calculateFlexibleInstallments()
+    // in server/src/controllers/customerController.js
+    // ----------------------------------------------------------------
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
-    const deadline = targetDueDate ? new Date(targetDueDate + 'T00:00:00') : null;
-    const isFutureDeadline = deadline && deadline.getTime() >= today.getTime();
-
-    const installments = [];
-    const baseInst = Math.round((targetBalance / numInstallments) * 100) / 100;
-    let cumulative = 0;
-
-    if (isFutureDeadline && scheduleMode !== 'EXTEND') {
-      // Future deadline exists & DEADLINE mode:
-      // Installment #N lands EXACTLY on targetDueDate (the agreed deadline).
-      // Preceding installments are spaced evenly or weekly BEFORE the deadline.
-      const totalDays = Math.max(1, Math.round((deadline.getTime() - today.getTime()) / (1000 * 60 * 60 * 24)));
-
-      for (let i = 1; i <= numInstallments; i++) {
-        let dueStr = targetDueDate;
-        if (i < numInstallments) {
-          const stepsBack = numInstallments - i;
-          const tentative = new Date(deadline);
-          if (frequency === 'WEEKLY') {
-            tentative.setDate(tentative.getDate() - stepsBack * 7);
-          } else {
-            tentative.setMonth(tentative.getMonth() - stepsBack);
-          }
-
-          if (tentative.getTime() >= today.getTime()) {
-            dueStr = tentative.toISOString().split('T')[0];
-          } else {
-            const dayOffset = Math.max(1, Math.round((i / numInstallments) * totalDays));
-            const interim = new Date(today);
-            interim.setDate(interim.getDate() + dayOffset);
-            if (interim.getTime() >= deadline.getTime()) {
-              interim.setDate(deadline.getDate() - 1);
-            }
-            dueStr = interim.toISOString().split('T')[0];
-          }
-        }
-
-        const amt = i === numInstallments ? Math.round((targetBalance - cumulative) * 100) / 100 : baseInst;
-        cumulative += amt;
-        installments.push({
-          installmentNo: i,
-          dueDate: dueStr,
-          amount: amt,
-          status: 'PENDING',
-          isDeadline: (i === numInstallments)
-        });
-      }
-    } else {
-      // Overdue deadline, missing deadline, or EXTEND mode: step forward into future from today
-      for (let i = 1; i <= numInstallments; i++) {
-        const d = new Date(today);
-        if (frequency === 'WEEKLY') {
-          d.setDate(d.getDate() + i * 7);
-        } else {
-          d.setMonth(d.getMonth() + i);
-        }
-        const dueStr = d.toISOString().split('T')[0];
-        const amt = i === numInstallments ? Math.round((targetBalance - cumulative) * 100) / 100 : baseInst;
-        cumulative += amt;
-        installments.push({
-          installmentNo: i,
-          dueDate: dueStr,
-          amount: amt,
-          status: 'PENDING',
-          isDeadline: false
-        });
-      }
+    // Parse deadline from the selected transaction
+    let deadlineDate = null;
+    if (targetDueDate) {
+      const parts = targetDueDate.split('-');
+      deadlineDate = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
     }
+
+    // Fallback: if no deadline, use end of current month
+    if (!deadlineDate || isNaN(deadlineDate.getTime())) {
+      deadlineDate = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    }
+    deadlineDate.setHours(0, 0, 0, 0);
+
+    // If deadline is in the past, clamp to today
+    if (deadlineDate < today) {
+      deadlineDate = new Date(today);
+    }
+
+    const deadlineDay   = deadlineDate.getDate();
+    const deadlineMonth = deadlineDate.getMonth();
+    const deadlineYear  = deadlineDate.getFullYear();
+
+    const rawDates = [];
+    for (let i = numInstallments - 1; i >= 0; i--) {
+      let d;
+      if (frequency === 'WEEKLY') {
+        // Weekly: go back i*7 days from deadline
+        d = new Date(deadlineDate);
+        d.setDate(deadlineDay - i * 7);
+      } else {
+        // Monthly: go back i months from deadline, pinning to same day-of-month
+        const targetMonth = deadlineMonth - i;
+        const targetYear  = deadlineYear + Math.floor(targetMonth / 12);
+        const normalizedMonth = ((targetMonth % 12) + 12) % 12;
+        const lastDayOfMonth  = new Date(targetYear, normalizedMonth + 1, 0).getDate();
+        const targetDay = Math.min(deadlineDay, lastDayOfMonth);
+        d = new Date(targetYear, normalizedMonth, targetDay);
+      }
+      rawDates.push(d);
+    }
+
+    // Filter out any dates strictly in the past
+    let validDates = rawDates.filter(d => d >= today);
+    if (validDates.length === 0) {
+      validDates = [new Date(deadlineDate)];
+    }
+
+    const actualNumInst  = validDates.length;
+    const perInstallment = targetBalance / actualNumInst;
+    const installments   = [];
+
+    for (let i = 0; i < validDates.length; i++) {
+      const dueDate = validDates[i];
+      const y   = dueDate.getFullYear();
+      const m   = String(dueDate.getMonth() + 1).padStart(2, '0');
+      const day = String(dueDate.getDate()).padStart(2, '0');
+      installments.push({
+        installmentNo: i + 1,
+        dueDate: `${y}-${m}-${day}`,
+        amount: parseFloat(perInstallment.toFixed(2)),
+        status: 'SCHEDULED',
+        isDeadline: (i === validDates.length - 1)
+      });
+    }
+
+    const dl = deadlineDate;
+    const deadlineDateStr = `${dl.getFullYear()}-${String(dl.getMonth() + 1).padStart(2, '0')}-${String(dl.getDate()).padStart(2, '0')}`;
 
     setScheduleResult({
       totalAmount: targetBalance,
       frequency,
-      numInstallments,
-      deadlineDate: targetDueDate,
+      numInstallments: actualNumInst,
+      deadlineDate: deadlineDateStr,
       installments
     });
   };
