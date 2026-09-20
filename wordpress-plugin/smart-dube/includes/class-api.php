@@ -532,12 +532,18 @@ class Smart_Dube_API {
         }
 
         $table_rep = $wpdb->prefix . 'dube_repayments';
+
+        // Auto-heal any older repayments where merchant_id was 0 or null
+        $wpdb->query("UPDATE $table_rep r JOIN $table_cp cp ON r.customer_id = cp.id SET r.merchant_id = cp.merchant_id WHERE r.merchant_id = 0 OR r.merchant_id IS NULL");
+        $wpdb->query("UPDATE $table_rep r JOIN $table_tx t ON r.transaction_id = t.id SET r.merchant_id = t.merchant_id WHERE r.merchant_id = 0 OR r.merchant_id IS NULL");
+
         $repayments = $wpdb->get_results($wpdb->prepare(
             "SELECT rep.*, cp.full_name as customer_name, cp.phone as customer_phone 
              FROM $table_rep rep 
              LEFT JOIN $table_cp cp ON rep.customer_id = cp.id 
-             WHERE rep.merchant_id = %d 
+             WHERE rep.merchant_id = %d OR rep.customer_id IN (SELECT id FROM $table_cp WHERE merchant_id = %d)
              ORDER BY rep.id DESC", 
+            $merchant_id,
             $merchant_id
         ), ARRAY_A);
 
@@ -562,17 +568,46 @@ class Smart_Dube_API {
         global $wpdb;
         $params = $request->get_json_params();
         $repayment_id = intval($params['repaymentId'] ?? 0);
+        $action = strtoupper(sanitize_text_field($params['action'] ?? 'APPROVE'));
 
         $table_rep = $wpdb->prefix . 'dube_repayments';
-        $table_cp = $wpdb->prefix . 'dube_customer_profiles';
+        $table_cp  = $wpdb->prefix . 'dube_customer_profiles';
+        $table_tx  = $wpdb->prefix . 'dube_credit_transactions';
 
         $repayment = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_rep WHERE id = %d", $repayment_id), ARRAY_A);
         if ($repayment) {
+            if ($action === 'REJECT') {
+                $wpdb->update($table_rep, ['status' => 'REJECTED'], ['id' => $repayment_id]);
+                return new WP_REST_Response(['message' => 'Payment receipt rejected successfully'], 200);
+            }
+
+            // Action is APPROVE:
             $wpdb->update($table_rep, ['status' => 'COMPLETED'], ['id' => $repayment_id]);
+
+            // Deduct customer current balance
             $wpdb->query($wpdb->prepare("UPDATE $table_cp SET current_balance = GREATEST(0, current_balance - %f) WHERE id = %d", $repayment['amount'], $repayment['customer_id']));
+
+            // Settle transaction if transaction_id exists
+            if (!empty($repayment['transaction_id'])) {
+                $tx_id = intval($repayment['transaction_id']);
+                $total_paid = floatval($wpdb->get_var($wpdb->prepare("SELECT COALESCE(SUM(amount), 0) FROM $table_rep WHERE transaction_id = %d AND status = 'COMPLETED'", $tx_id)));
+                $tx_total = floatval($wpdb->get_var($wpdb->prepare("SELECT total_amount FROM $table_tx WHERE id = %d", $tx_id)));
+                if ($total_paid >= $tx_total) {
+                    $wpdb->update($table_tx, ['status' => 'SETTLED'], ['id' => $tx_id]);
+                } else if ($total_paid > 0) {
+                    $wpdb->update($table_tx, ['status' => 'PARTIALLY_PAID'], ['id' => $tx_id]);
+                }
+            } else {
+                // If transaction_id was not set, find oldest pending transaction for customer & merchant
+                $pending_tx = $wpdb->get_row($wpdb->prepare("SELECT id, total_amount FROM $table_tx WHERE customer_id = %d AND merchant_id = %d AND status IN ('PENDING', 'PARTIALLY_PAID') ORDER BY id ASC LIMIT 1", $repayment['customer_id'], $repayment['merchant_id']), ARRAY_A);
+                if ($pending_tx) {
+                    $wpdb->update($table_rep, ['transaction_id' => $pending_tx['id']], ['id' => $repayment_id]);
+                    $wpdb->update($table_tx, ['status' => 'SETTLED'], ['id' => $pending_tx['id']]);
+                }
+            }
         }
 
-        return new WP_REST_Response(['message' => 'Repayment approved successfully'], 200);
+        return new WP_REST_Response(['message' => 'Repayment approved successfully and customer debt balance updated'], 200);
     }
 
     // 8. Send SMS Reminder
@@ -625,6 +660,18 @@ class Smart_Dube_API {
                     $tx['items'] = [];
                 }
                 $tx['total_amount'] = floatval($tx['total_amount'] ?? 0);
+
+                // Check for pending repayment
+                $pending_rep = $wpdb->get_row($wpdb->prepare(
+                    "SELECT id, repayment_ref, amount, payment_gateway, reference_code, created_at, receipt_url 
+                     FROM $table_rep 
+                     WHERE (transaction_id = %d OR reference_code = %s) AND status = 'PENDING' 
+                     ORDER BY id DESC LIMIT 1", 
+                    $tx['id'], 
+                    $tx['transaction_ref']
+                ), ARRAY_A);
+                $tx['has_pending_repayment'] = !empty($pending_rep);
+                $tx['pending_repayment'] = $pending_rep ?: null;
             }
             unset($tx);
         } else {
@@ -632,9 +679,11 @@ class Smart_Dube_API {
         }
 
         $repayments = $wpdb->get_results($wpdb->prepare(
-            "SELECT rep.*, m.store_name 
+            "SELECT rep.*, COALESCE(m.store_name, cp_m.store_name, 'Merchant Store') as store_name 
              FROM $table_rep rep 
              LEFT JOIN $table_merchants m ON rep.merchant_id = m.id 
+             LEFT JOIN $table_cp cp ON rep.customer_id = cp.id 
+             LEFT JOIN $table_merchants cp_m ON cp.merchant_id = cp_m.id 
              WHERE rep.customer_id IN (SELECT id FROM $table_cp WHERE user_id = %d OR phone = %s)
              ORDER BY rep.id DESC", 
             $user_id,
@@ -719,22 +768,126 @@ class Smart_Dube_API {
     // 10. Customer Repay
     public static function customer_repay($request) {
         global $wpdb;
+        $user = self::get_authenticated_user($request);
+        $user_id = $user ? $user['id'] : 0;
         $params = $request->get_json_params();
+
         $table_rep = $wpdb->prefix . 'dube_repayments';
+        $table_tx  = $wpdb->prefix . 'dube_credit_transactions';
+        $table_cp  = $wpdb->prefix . 'dube_customer_profiles';
+        $table_m   = $wpdb->prefix . 'dube_merchants';
+
+        $transaction_id = !empty($params['transactionId']) ? intval($params['transactionId']) : null;
+        $customer_id    = intval($params['customerId'] ?? 0);
+        $merchant_id    = intval($params['merchantId'] ?? 0);
+        $amount         = floatval($params['amount'] ?? 0);
+        $gateway        = sanitize_text_field($params['paymentGateway'] ?? 'RECEIPT_UPLOAD');
+        $ref_code       = sanitize_text_field($params['referenceCode'] ?? '');
+        $receipt_url    = sanitize_text_field($params['receiptUrl'] ?? null);
+        $installment_no = !empty($params['installmentNo']) ? intval($params['installmentNo']) : null;
+
+        // Auto-resolve merchant_id and customer_id if missing
+        if ($transaction_id && (!$merchant_id || !$customer_id)) {
+            $tx_row = $wpdb->get_row($wpdb->prepare("SELECT customer_id, merchant_id FROM $table_tx WHERE id = %d", $transaction_id), ARRAY_A);
+            if ($tx_row) {
+                if (!$customer_id) $customer_id = intval($tx_row['customer_id']);
+                if (!$merchant_id) $merchant_id = intval($tx_row['merchant_id']);
+            }
+        }
+
+        if (!$customer_id && $user_id) {
+            $customer_id = intval($wpdb->get_var($wpdb->prepare("SELECT id FROM $table_cp WHERE user_id = %d LIMIT 1", $user_id)));
+        }
+
+        if (!$merchant_id && $customer_id) {
+            $merchant_id = intval($wpdb->get_var($wpdb->prepare("SELECT merchant_id FROM $table_cp WHERE id = %d", $customer_id)));
+        }
+
+        $store_name = 'Merchant Store';
+        if ($merchant_id) {
+            $store_name = $wpdb->get_var($wpdb->prepare("SELECT store_name FROM $table_m WHERE id = %d", $merchant_id)) ?: 'Merchant Store';
+        }
+
+        if ($amount <= 0) {
+            return new WP_REST_Response(['error' => 'Valid repayment amount is required.'], 400);
+        }
 
         $rep_ref = 'PAY-' . strtoupper(wp_generate_password(6, false));
+        $is_upload = ($gateway === 'RECEIPT_UPLOAD');
+        $status = $is_upload ? 'PENDING' : 'COMPLETED';
+
         $wpdb->insert($table_rep, [
-            'repayment_ref' => $rep_ref,
-            'customer_id' => intval($params['customerId']),
-            'merchant_id' => intval($params['merchantId']),
-            'amount' => floatval($params['amount']),
-            'payment_gateway' => sanitize_text_field($params['paymentGateway']),
-            'reference_code' => sanitize_text_field($params['referenceCode']),
-            'receipt_url' => sanitize_text_field($params['receiptUrl'] ?? null),
-            'status' => 'PENDING'
+            'repayment_ref'   => $rep_ref,
+            'transaction_id'  => $transaction_id,
+            'customer_id'     => $customer_id,
+            'merchant_id'     => $merchant_id,
+            'amount'          => $amount,
+            'payment_gateway' => $gateway,
+            'reference_code'  => $ref_code,
+            'receipt_url'     => $receipt_url,
+            'status'          => $status,
+            'created_at'      => current_time('mysql')
         ]);
 
-        return new WP_REST_Response(['message' => 'Payment receipt submitted successfully', 'repaymentRef' => $rep_ref], 201);
+        $repayment_id = $wpdb->insert_id;
+
+        // If instant digital payment (Telebirr, CBE Birr, Chapa) - complete settlement immediately
+        if (!$is_upload) {
+            // Deduct customer current balance
+            if ($customer_id) {
+                $wpdb->query($wpdb->prepare("UPDATE $table_cp SET current_balance = GREATEST(0, current_balance - %f) WHERE id = %d", $amount, $customer_id));
+            }
+            // Settle transaction
+            if ($transaction_id) {
+                $paid_sum = floatval($wpdb->get_var($wpdb->prepare("SELECT COALESCE(SUM(amount), 0) FROM $table_rep WHERE transaction_id = %d AND status = 'COMPLETED'", $transaction_id)));
+                $tx_total = floatval($wpdb->get_var($wpdb->prepare("SELECT total_amount FROM $table_tx WHERE id = %d", $transaction_id)));
+                if ($paid_sum >= $tx_total) {
+                    $wpdb->update($table_tx, ['status' => 'SETTLED'], ['id' => $transaction_id]);
+                } else if ($paid_sum > 0) {
+                    $wpdb->update($table_tx, ['status' => 'PARTIALLY_PAID'], ['id' => $transaction_id]);
+                }
+            }
+        }
+
+        // If installment specified, mark that installment
+        if ($installment_no && $transaction_id) {
+            $table_schedules = $wpdb->prefix . 'dube_installment_schedules';
+            if ($wpdb->get_var("SHOW TABLES LIKE '$table_schedules'")) {
+                $wpdb->update($table_schedules, [
+                    'status' => ($status === 'COMPLETED') ? 'PAID' : 'PENDING_APPROVAL',
+                    'paid_amount' => $amount
+                ], [
+                    'transaction_id' => $transaction_id,
+                    'installment_number' => $installment_no
+                ]);
+            }
+        }
+
+        return new WP_REST_Response([
+            'message' => $is_upload 
+                ? 'Payment receipt submitted successfully and is awaiting merchant verification' 
+                : 'Payment settlement completed successfully',
+            'repaymentRef' => $rep_ref,
+            'receipt' => [
+                'id'              => $repayment_id,
+                'repaymentRef'    => $rep_ref,
+                'repayment_ref'   => $rep_ref,
+                'refCode'         => $ref_code,
+                'referenceCode'   => $ref_code,
+                'amount'          => $amount,
+                'gateway'         => $gateway,
+                'payment_gateway' => $gateway,
+                'status'          => $status,
+                'receiptUrl'      => $receipt_url,
+                'receipt_url'     => $receipt_url,
+                'customerId'      => $customer_id,
+                'merchantId'      => $merchant_id,
+                'transactionId'   => $transaction_id,
+                'storeName'       => $store_name,
+                'store_name'      => $store_name,
+                'created_at'      => current_time('mysql')
+            ]
+        ], 201);
     }
 
     // 11. Customer Schedule Endpoints

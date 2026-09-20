@@ -926,17 +926,35 @@ export const CustomerPortal = () => {
                               <span className="font-mono text-xs font-bold text-emerald-400">{tx.transaction_ref}</span>
                               <span className="text-slate-400 text-xs">•</span>
                               <span className="font-semibold text-slate-200 text-xs">{tx.store_name}</span>
-                              <span
-                                className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
-                                  tx.status === 'SETTLED'
-                                    ? 'bg-emerald-500/20 text-emerald-400'
-                                    : tx.status === 'OVERDUE'
-                                    ? 'bg-red-500/20 text-red-400'
-                                    : 'bg-amber-500/20 text-amber-400'
-                                }`}
-                              >
-                                {tx.status === 'SETTLED' ? t('SETTLED', 'የተከፈለ') : tx.status === 'OVERDUE' ? t('OVERDUE', 'ቀን ያለፈበት') : t('PENDING', 'ያልተከፈለ')}
-                              </span>
+                              {(() => {
+                                const pendingRep = repayments.find(r => 
+                                  (String(r.transaction_id) === String(tx.id) || r.reference_code === tx.transaction_ref) && r.status === 'PENDING'
+                                );
+                                const hasPendingPayment = !!pendingRep || !!tx.has_pending_repayment;
+
+                                if (hasPendingPayment) {
+                                  return (
+                                    <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-amber-500/20 text-amber-300 border border-amber-500/30 flex items-center gap-1 animate-pulse">
+                                      <span>⏳</span>
+                                      <span>{t('SETTLEMENT UNDER REVIEW', 'ክፍያ በማረጋገጥ ላይ')}</span>
+                                    </span>
+                                  );
+                                }
+
+                                return (
+                                  <span
+                                    className={`px-2 py-0.5 rounded-full text-[10px] font-extrabold ${
+                                      tx.status === 'SETTLED'
+                                        ? 'bg-emerald-500/20 text-emerald-400'
+                                        : tx.status === 'OVERDUE'
+                                        ? 'bg-red-500/20 text-red-400'
+                                        : 'bg-amber-500/20 text-amber-400'
+                                    }`}
+                                  >
+                                    {tx.status === 'SETTLED' ? t('SETTLED', 'የተከፈለ') : tx.status === 'OVERDUE' ? t('OVERDUE', 'ቀን ያለፈበት') : t('PENDING', 'ያልተከፈለ')}
+                                  </span>
+                                );
+                              })()}
                             </div>
 
                             {/* Line items preview */}
@@ -955,26 +973,60 @@ export const CustomerPortal = () => {
                               <p className="font-extrabold text-amber-400 text-base">{fmt(tx.total_amount)} ETB</p>
                             </div>
 
-                            {tx.status !== 'SETTLED' && (
-                              <div className="flex items-center gap-2">
-                                <button
-                                  onClick={() => openScheduleModal(tx.merchant_id, tx.id)}
-                                  className="px-3 py-2 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-sky-400 hover:text-sky-300 text-xs font-bold border border-slate-700/80 flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
-                                  title={t('Create installment schedule for this Dube purchase', 'ለዚህ የዱቤ ግዢ የክፍያ የጊዜ ሰሌዳ አውጣ')}
-                                >
-                                  <Clock className="w-3.5 h-3.5 text-sky-400" />
-                                  <span>{t('Schedule', 'የጊዜ ሰሌዳ')}</span>
-                                </button>
+                            {(() => {
+                              const pendingRep = repayments.find(r => 
+                                (String(r.transaction_id) === String(tx.id) || r.reference_code === tx.transaction_ref) && r.status === 'PENDING'
+                              );
+                              const hasPendingPayment = !!pendingRep || !!tx.has_pending_repayment;
 
-                                <button
-                                  onClick={() => setSelectedTxForPayment(tx)}
-                                  className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 flex items-center gap-1.5 transition-all cursor-pointer"
-                                >
-                                  <CreditCard className="w-3.5 h-3.5" />
-                                  <span>{t('Pay Debt', 'ዕዳ ክፈል')}</span>
-                                </button>
-                              </div>
-                            )}
+                              if (hasPendingPayment) {
+                                return (
+                                  <button
+                                    onClick={() => {
+                                      const rep = pendingRep || tx.pending_repayment;
+                                      if (rep) {
+                                        setSelectedReceipt({
+                                          ...rep,
+                                          store_name: tx.store_name,
+                                          amount: rep.amount || tx.total_amount,
+                                          payment_gateway: rep.payment_gateway || 'RECEIPT_UPLOAD'
+                                        });
+                                      }
+                                    }}
+                                    className="px-3.5 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 text-amber-300 border border-amber-500/40 text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                                    title={t('Your payment receipt upload is pending merchant approval', 'ያስገቡት የክፍያ ደረሰኝ በነጋዴው ማረጋገጫ በመጠባበቅ ላይ ነው')}
+                                  >
+                                    <Clock className="w-3.5 h-3.5 text-amber-400" />
+                                    <span>{t('Settlement Under Review', 'የተላከውን ደረሰኝ እይ')}</span>
+                                  </button>
+                                );
+                              }
+
+                              if (tx.status !== 'SETTLED') {
+                                return (
+                                  <div className="flex items-center gap-2">
+                                    <button
+                                      onClick={() => openScheduleModal(tx.merchant_id, tx.id)}
+                                      className="px-3 py-2 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-sky-400 hover:text-sky-300 text-xs font-bold border border-slate-700/80 flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                                      title={t('Create installment schedule for this Dube purchase', 'ለዚህ የዱቤ ግዢ የክፍያ የጊዜ ሰሌዳ አውጣ')}
+                                    >
+                                      <Clock className="w-3.5 h-3.5 text-sky-400" />
+                                      <span>{t('Schedule', 'የጊዜ ሰሌዳ')}</span>
+                                    </button>
+
+                                    <button
+                                      onClick={() => setSelectedTxForPayment(tx)}
+                                      className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold shadow-lg shadow-emerald-600/20 flex items-center gap-1.5 transition-all cursor-pointer"
+                                    >
+                                      <CreditCard className="w-3.5 h-3.5" />
+                                      <span>{t('Pay Debt', 'ዕዳ ክፈል')}</span>
+                                    </button>
+                                  </div>
+                                );
+                              }
+
+                              return null;
+                            })()}
                           </div>
                         </div>
                       );

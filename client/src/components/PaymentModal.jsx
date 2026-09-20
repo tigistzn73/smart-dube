@@ -151,6 +151,7 @@ export const PaymentModal = ({ isOpen, onClose, transaction, customerId, onPayme
         body: JSON.stringify({
           transactionId: transaction.id,
           customerId: customerId || transaction.customer_id,
+          merchantId: transaction.merchant_id || undefined,
           amount: parseFloat(amount),
           paymentGateway: gateway,
           referenceCode: refCode.trim(),
@@ -165,8 +166,18 @@ export const PaymentModal = ({ isOpen, onClose, transaction, customerId, onPayme
         throw new Error(data.error || 'Payment settlement failed.');
       }
 
-      setSuccessReceipt(data.receipt);
-      if (onPaymentSuccess) onPaymentSuccess(data.receipt);
+      const receiptObj = data.receipt || {
+        repaymentRef: data.repaymentRef || `PAY-${Date.now()}`,
+        gateway: gateway,
+        referenceCode: refCode.trim(),
+        amount: parseFloat(amount),
+        status: gateway === 'RECEIPT_UPLOAD' ? 'PENDING' : 'COMPLETED',
+        receiptUrl: receiptUrl,
+        storeName: transaction.store_name || 'Merchant'
+      };
+
+      setSuccessReceipt(receiptObj);
+      if (onPaymentSuccess) onPaymentSuccess(receiptObj);
     } catch (err) {
       setError(err.message);
     } finally {

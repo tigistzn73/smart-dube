@@ -42,10 +42,22 @@ export const ReceiptModal = ({ isOpen, onClose, receipt }) => {
           </div>
 
           <div className="flex justify-center">
-            <div className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full text-[10px] font-bold flex items-center gap-1 print:border-black print:text-black print:bg-transparent">
-              <CheckCircle2 className="w-3.5 h-3.5" />
-              PAYMENT SUCCESSFUL
-            </div>
+            {receipt.status === 'PENDING' ? (
+              <div className="bg-amber-500/15 text-amber-400 border border-amber-500/30 px-3 py-1 rounded-full text-[10px] font-bold flex items-center gap-1 print:border-black print:text-black print:bg-transparent">
+                <span>⏳</span>
+                <span>PENDING MERCHANT APPROVAL</span>
+              </div>
+            ) : receipt.status === 'REJECTED' ? (
+              <div className="bg-red-500/15 text-red-400 border border-red-500/30 px-3 py-1 rounded-full text-[10px] font-bold flex items-center gap-1 print:border-black print:text-black print:bg-transparent">
+                <span>❌</span>
+                <span>PAYMENT REJECTED</span>
+              </div>
+            ) : (
+              <div className="bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 px-3 py-1 rounded-full text-[10px] font-bold flex items-center gap-1 print:border-black print:text-black print:bg-transparent">
+                <CheckCircle2 className="w-3.5 h-3.5" />
+                <span>PAYMENT SUCCESSFUL</span>
+              </div>
+            )}
           </div>
 
           <div className="space-y-4">
