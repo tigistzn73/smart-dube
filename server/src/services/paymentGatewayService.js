@@ -69,17 +69,7 @@ async function processRepayment({ transactionId, customerId, amount, gateway, re
     throw new Error(`Transaction reference code "${refCode}" has already been submitted and is ${stateStr}. Duplicates are restricted.`);
   }
 
-  // 4. Prevent reuse of identical receipt image screenshot
-  if (isReceiptUpload && receiptUrl) {
-    const existingImage = await db.get(
-      "SELECT id, status FROM repayments WHERE receipt_url = $1 AND status IN ('PENDING', 'COMPLETED')",
-      [receiptUrl]
-    );
-    if (existingImage) {
-      const stateStr = existingImage.status === 'PENDING' ? 'pending approval review' : 'already completed';
-      throw new Error('This exact receipt screenshot image has already been uploaded for another repayment. Please upload the correct receipt.');
-    }
-  }
+
 
   // Generate unique repayment ref
   const repaymentRef = `PAY-${Date.now()}-${Math.floor(1000 + Math.random() * 9000)}`;
@@ -193,9 +183,10 @@ async function processRepayment({ transactionId, customerId, amount, gateway, re
     // so every merchant ledger (e.g. Arda and Zemer) receives the payment receipt
     try {
       const allProfiles = await db.all(
-        `SELECT cp.id, cp.merchant_id, m.store_name, m.phone as merchant_phone
+        `SELECT cp.id, cp.merchant_id, m.store_name, u.phone as merchant_phone
          FROM customer_profiles cp
          JOIN merchants m ON cp.merchant_id = m.id
+         JOIN users u ON m.user_id = u.id
          WHERE (cp.phone = $1 OR cp.user_id = $2) AND cp.merchant_id != $3`,
         [customer.phone, customer.user_id || null, transaction.merchant_id]
       );
@@ -384,9 +375,10 @@ async function processMultiMerchantRepayment({ userId, userPhone, amount, gatewa
   }
 
   const activeProfiles = await db.all(`
-    SELECT cp.*, m.store_name, m.phone as merchant_phone
+    SELECT cp.*, m.store_name, u.phone as merchant_phone
     FROM customer_profiles cp
     JOIN merchants m ON cp.merchant_id = m.id
+    JOIN users u ON m.user_id = u.id
     WHERE (cp.user_id = $1 OR cp.phone = (SELECT phone FROM users WHERE id = $1) OR cp.phone = $2)
       AND cp.current_balance > 0
     ORDER BY cp.current_balance DESC

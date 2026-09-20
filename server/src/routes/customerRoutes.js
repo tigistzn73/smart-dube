@@ -19,8 +19,6 @@ router.get('/dashboard', getCustomerDashboard);
 router.post(
   '/repay',
   [
-    body('transactionId').notEmpty().withMessage('Transaction ID is required'),
-    body('customerId').notEmpty().withMessage('Customer profile ID is required'),
     body('amount').isNumeric().withMessage('Repayment amount must be a number'),
     body('paymentGateway').isIn(['TELEBIRR', 'CHAPA', 'CBE_BIRR', 'CASH', 'RECEIPT_UPLOAD']).withMessage('Invalid payment gateway choice'),
     validateResult

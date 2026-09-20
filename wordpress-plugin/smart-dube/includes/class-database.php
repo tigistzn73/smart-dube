@@ -20,6 +20,8 @@ class Smart_Dube_Database {
         } else {
             // Ensure password_hash column is wide enough in existing installations
             @$wpdb->query("ALTER TABLE $table_users MODIFY password_hash VARCHAR(255) NOT NULL");
+            $table_repayments = $wpdb->prefix . 'dube_repayments';
+            @$wpdb->query("ALTER TABLE $table_repayments MODIFY receipt_url LONGTEXT DEFAULT NULL");
         }
     }
 
@@ -113,7 +115,7 @@ class Smart_Dube_Database {
             amount decimal(12,2) NOT NULL,
             payment_gateway varchar(30) NOT NULL,
             reference_code varchar(100) NOT NULL,
-            receipt_url text DEFAULT NULL,
+            receipt_url longtext DEFAULT NULL,
             status varchar(20) DEFAULT 'PENDING' NOT NULL,
             created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
             PRIMARY KEY  (id),
@@ -122,6 +124,7 @@ class Smart_Dube_Database {
             KEY merchant_id (merchant_id)
         ) $charset_collate;";
         dbDelta($sql_repayments);
+        @$wpdb->query("ALTER TABLE $table_repayments MODIFY receipt_url LONGTEXT DEFAULT NULL");
 
         // 6. SMS Notifications table
         $table_sms = $wpdb->prefix . 'dube_sms_notifications';

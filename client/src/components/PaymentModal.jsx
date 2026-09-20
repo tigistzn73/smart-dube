@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   X,
   Smartphone,
@@ -34,6 +34,17 @@ export const PaymentModal = ({ isOpen, onClose, transaction, customerId, onPayme
   const [isScanningReceipt, setIsScanningReceipt] = useState(false);
   const [detectedCode, setDetectedCode] = useState(null);
   const fileInputRef = useRef(null);
+
+  useEffect(() => {
+    if (isOpen && transaction) {
+      setAmount(transaction.total_amount || 0);
+      setRefCode('');
+      setReceiptUrl(null);
+      setError('');
+      setSuccessReceipt(null);
+      setDetectedCode(null);
+    }
+  }, [isOpen, transaction]);
 
   const fmt = (val, d = 2) => (parseFloat(val) || 0).toFixed(d);
 
@@ -96,21 +107,22 @@ export const PaymentModal = ({ isOpen, onClose, transaction, customerId, onPayme
   const validateRefCode = (code, selectedGateway) => {
     if (!code || !code.trim()) return false;
     const clean = code.trim().toUpperCase();
-    if (clean.length < 8) return false;
+    if (clean.length < 6) return false;
 
     if (selectedGateway === 'TELEBIRR') {
-      return /^(FT[A-Z0-9]{6,16}|TB[0-9]{6,16}|TELEBIRR-[0-9]{6,16})$/i.test(clean);
+      return /^(FT[A-Z0-9]{5,18}|TB[0-9]{5,18}|TELEBIRR-[0-9]{5,18}|[A-Z0-9]{6,25})$/i.test(clean);
     }
     if (selectedGateway === 'CBE_BIRR') {
-      return /^(CBE[0-9]{6,16}|TX[0-9]{6,16}|CBEBIRR-[0-9]{6,16})$/i.test(clean);
+      return /^(CBE[0-9]{5,18}|TX[0-9]{5,18}|CBEBIRR-[0-9]{5,18}|FT[A-Z0-9]{5,18}|[A-Z0-9]{6,25})$/i.test(clean);
     }
     if (selectedGateway === 'CHAPA') {
-      return /^(CP-[0-9]{6,16}|CHAPA-[0-9]{6,16}|CHP_[A-Z0-9]{6,16})$/i.test(clean);
+      return /^(CP-[0-9]{5,18}|CHAPA-[0-9]{5,18}|CHP_[A-Z0-9]{5,18}|[A-Z0-9]{6,25})$/i.test(clean);
     }
     if (selectedGateway === 'RECEIPT_UPLOAD') {
-      return /^(FT[A-Z0-9]{6,16}|TB[0-9]{6,16}|TELEBIRR-[0-9]{6,16}|CBE[0-9]{6,16}|TX[0-9]{6,16}|CBEBIRR-[0-9]{6,16}|CP-[0-9]{6,16}|CHAPA-[0-9]{6,16}|CHP_[A-Z0-9]{6,16}|REC-[0-9]{6,16}|REC[A-Z0-9]{6,16}|[A-Z0-9]{8,20})$/i.test(clean);
+      const dummyPatterns = /^(TEST|DUMMY|SAMPLE|EXAMPLE|12345678|ABCDEFGH|AAAAAAAA)$/i;
+      return clean.length >= 6 && !dummyPatterns.test(clean);
     }
-    return clean.length >= 8;
+    return clean.length >= 6;
   };
 
   const handlePay = async (e) => {
@@ -149,8 +161,8 @@ export const PaymentModal = ({ isOpen, onClose, transaction, customerId, onPayme
           Authorization: `Bearer ${token}`
         },
         body: JSON.stringify({
-          transactionId: transaction.id,
-          customerId: customerId || transaction.customer_id,
+          transactionId: transaction.id || undefined,
+          customerId: customerId || transaction.customer_id || undefined,
           merchantId: transaction.merchant_id || undefined,
           amount: parseFloat(amount),
           paymentGateway: gateway,

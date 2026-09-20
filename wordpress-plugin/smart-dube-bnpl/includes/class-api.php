@@ -868,7 +868,15 @@ class Smart_Dube_API {
         $amount         = floatval($params['amount'] ?? 0);
         $gateway        = strtoupper(sanitize_text_field($params['paymentGateway'] ?? 'TELEBIRR'));
         $ref_code       = trim(sanitize_text_field($params['referenceCode'] ?? ''));
-        $receipt_url    = sanitize_text_field($params['receiptUrl'] ?? null);
+        $raw_receipt    = $params['receiptUrl'] ?? null;
+        $receipt_url    = null;
+        if (!empty($raw_receipt) && is_string($raw_receipt)) {
+            if (strpos($raw_receipt, 'data:image/') === 0) {
+                $receipt_url = $raw_receipt;
+            } else {
+                $receipt_url = esc_url_raw($raw_receipt);
+            }
+        }
         $installment_no = !empty($params['installmentNo']) ? intval($params['installmentNo']) : null;
         $is_multi_merchant = !empty($params['isMultiMerchant']);
 
@@ -885,16 +893,16 @@ class Smart_Dube_API {
         $is_valid_format = false;
 
         if ($gateway === 'TELEBIRR') {
-            $is_valid_format = preg_match('/^(FT[A-Z0-9]{6,16}|TB[0-9]{6,16}|TELEBIRR-[0-9]{6,16})$/i', $clean_ref);
+            $is_valid_format = preg_match('/^(FT[A-Z0-9]{5,18}|TB[0-9]{5,18}|TELEBIRR-[0-9]{5,18}|[A-Z0-9]{6,25})$/i', $clean_ref);
         } elseif ($gateway === 'CBE_BIRR') {
-            $is_valid_format = preg_match('/^(CBE[0-9]{6,16}|TX[0-9]{6,16}|CBEBIRR-[0-9]{6,16})$/i', $clean_ref);
+            $is_valid_format = preg_match('/^(CBE[0-9]{5,18}|TX[0-9]{5,18}|CBEBIRR-[0-9]{5,18}|FT[A-Z0-9]{5,18}|[A-Z0-9]{6,25})$/i', $clean_ref);
         } elseif ($gateway === 'CHAPA') {
-            $is_valid_format = preg_match('/^(CP-[0-9]{6,16}|CHAPA-[0-9]{6,16}|CHP_[A-Z0-9]{6,16})$/i', $clean_ref);
+            $is_valid_format = preg_match('/^(CP-[0-9]{5,18}|CHAPA-[0-9]{5,18}|CHP_[A-Z0-9]{5,18}|[A-Z0-9]{6,25})$/i', $clean_ref);
         } elseif ($gateway === 'RECEIPT_UPLOAD') {
             $dummy_patterns = '/^(TEST|DUMMY|SAMPLE|EXAMPLE|12345678|ABCDEFGH|AAAAAAAA)$/i';
-            $is_valid_format = (strlen($clean_ref) >= 8) && !preg_match($dummy_patterns, $clean_ref) && preg_match('/^[A-Z0-9_\-]{8,30}$/i', $clean_ref);
+            $is_valid_format = (strlen($clean_ref) >= 6) && !preg_match($dummy_patterns, $clean_ref);
         } else {
-            $is_valid_format = (strlen($clean_ref) >= 8);
+            $is_valid_format = (strlen($clean_ref) >= 6);
         }
 
         if (!$is_valid_format) {
@@ -928,19 +936,6 @@ class Smart_Dube_API {
             return new WP_REST_Response([
                 'error' => "Transaction reference code \"{$ref_code}\" has already been submitted and is {$state_str}. Duplicates are restricted."
             ], 400);
-        }
-
-        // 4. Prevent duplicate receipt image screenshot
-        if ($is_upload && !empty($receipt_url)) {
-            $existing_img = $wpdb->get_row($wpdb->prepare(
-                "SELECT id, status FROM $table_rep WHERE receipt_url = %s AND status IN ('PENDING', 'COMPLETED') LIMIT 1",
-                $receipt_url
-            ), ARRAY_A);
-            if ($existing_img) {
-                return new WP_REST_Response([
-                    'error' => 'This exact receipt screenshot image has already been uploaded for another repayment. Please upload the correct receipt.'
-                ], 400);
-            }
         }
 
         // 5. Multi-Merchant Repayment branch

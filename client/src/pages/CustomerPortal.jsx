@@ -549,6 +549,23 @@ export const CustomerPortal = () => {
                     </div>
                   </div>
                   <p className="text-[11px] text-slate-400">{t(`Across ${summary.activeAccountsCount || 0} neighborhood merchant accounts`, `በ${summary.activeAccountsCount || 0} የነጋዴ አካውንቶች ውስጥ`)}</p>
+                  {summary.totalBalance > 0 && (
+                    <button
+                      onClick={() => {
+                        setSelectedTxForPayment({
+                          id: null,
+                          isMultiMerchant: true,
+                          transaction_ref: 'ALL-MERCHANTS',
+                          store_name: 'All Merchant Accounts',
+                          total_amount: summary.totalBalance
+                        });
+                      }}
+                      className="mt-3 py-1.5 px-3 rounded-lg bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white text-xs font-bold inline-flex items-center gap-1.5 transition-all cursor-pointer shadow-md shadow-emerald-600/20"
+                    >
+                      <CreditCard className="w-3.5 h-3.5" />
+                      <span>{t('Pay Total Debt Now', 'አጠቃላይ እዳ አሁን ክፈል')}</span>
+                    </button>
+                  )}
                 </div>
 
                 {/* Card 2: Total Credit Limit */}
@@ -738,6 +755,27 @@ export const CustomerPortal = () => {
                             </p>
                           </div>
                         </div>
+
+                        {currentBalance > 0 && (
+                          <button
+                            onClick={() => {
+                              const targetTx = transactions.find(t => t.merchant_id === p.merchant_id && t.status !== 'SETTLED')
+                                || transactions.find(t => t.customer_id === p.id && t.status !== 'SETTLED');
+                              setSelectedTxForPayment({
+                                id: targetTx ? targetTx.id : null,
+                                transaction_ref: targetTx ? targetTx.transaction_ref : `STORE-${p.merchant_id}`,
+                                store_name: p.store_name,
+                                merchant_id: p.merchant_id,
+                                customer_id: p.id,
+                                total_amount: currentBalance
+                              });
+                            }}
+                            className="w-full py-2 px-3 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-bold flex items-center justify-center gap-1.5 transition-all cursor-pointer shadow-md shadow-emerald-600/20"
+                          >
+                            <CreditCard className="w-3.5 h-3.5" />
+                            <span>{t('Pay Store Debt', 'የዚህን ሱቅ ዕዳ ክፈል')} ({fmt(currentBalance)} ETB)</span>
+                          </button>
+                        )}
                       </div>
                     );
                   })}
@@ -844,16 +882,15 @@ export const CustomerPortal = () => {
                                         || transactions.find(t => t.merchant_id === profileForStore?.merchant_id && t.status !== 'SETTLED')
                                         || transactions.find(t => t.status !== 'SETTLED')
                                         || transactions[0];
-                                      if (targetTx) {
-                                        setSelectedTxForPayment({
-                                          ...targetTx,
-                                          store_name: profileForStore ? profileForStore.store_name : targetTx.store_name,
-                                          merchant_id: profileForStore ? profileForStore.merchant_id : targetTx.merchant_id,
-                                          customer_id: profileForStore ? profileForStore.id : targetTx.customer_id,
-                                          total_amount: inst.amount,
-                                          installmentNo: inst.installmentNo
-                                        });
-                                      }
+                                      setSelectedTxForPayment({
+                                        id: targetTx ? targetTx.id : null,
+                                        transaction_ref: targetTx ? targetTx.transaction_ref : `INST-${inst.installmentNo}`,
+                                        store_name: profileForStore ? profileForStore.store_name : (targetTx?.store_name || 'Merchant Store'),
+                                        merchant_id: profileForStore ? profileForStore.merchant_id : targetTx?.merchant_id,
+                                        customer_id: profileForStore ? profileForStore.id : targetTx?.customer_id,
+                                        total_amount: inst.amount,
+                                        installmentNo: inst.installmentNo
+                                      });
                                     }}
                                     className="px-2 py-0.5 rounded bg-emerald-600 hover:bg-emerald-500 text-white text-[10px] font-bold cursor-pointer transition-all"
                                   >
