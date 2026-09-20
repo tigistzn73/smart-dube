@@ -573,41 +573,124 @@ class Smart_Dube_API {
         $table_rep = $wpdb->prefix . 'dube_repayments';
         $table_cp  = $wpdb->prefix . 'dube_customer_profiles';
         $table_tx  = $wpdb->prefix . 'dube_credit_transactions';
+        $table_m   = $wpdb->prefix . 'dube_merchants';
+        $table_schedules = $wpdb->prefix . 'dube_installment_schedules';
 
         $repayment = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_rep WHERE id = %d", $repayment_id), ARRAY_A);
-        if ($repayment) {
-            if ($action === 'REJECT') {
-                $wpdb->update($table_rep, ['status' => 'REJECTED'], ['id' => $repayment_id]);
-                return new WP_REST_Response(['message' => 'Payment receipt rejected successfully'], 200);
+        if (!$repayment) {
+            return new WP_REST_Response(['error' => 'Repayment record not found.'], 404);
+        }
+
+        $customer = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE id = %d", $repayment['customer_id']), ARRAY_A);
+        $merchant = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_m WHERE id = %d", $repayment['merchant_id']), ARRAY_A);
+        $store_name = $merchant ? $merchant['store_name'] : 'Merchant Store';
+
+        if ($action === 'REJECT') {
+            $wpdb->update($table_rep, ['status' => 'REJECTED'], ['id' => $repayment_id]);
+
+            // If an installment was pending approval, revert to SCHEDULED
+            if ($wpdb->get_var("SHOW TABLES LIKE '$table_schedules'")) {
+                if (!empty($repayment['transaction_id'])) {
+                    $wpdb->query($wpdb->prepare(
+                        "UPDATE $table_schedules SET status = 'SCHEDULED' WHERE transaction_id = %d AND status = 'PENDING_APPROVAL' LIMIT 1",
+                        $repayment['transaction_id']
+                    ));
+                } else {
+                    $wpdb->query($wpdb->prepare(
+                        "UPDATE $table_schedules SET status = 'SCHEDULED' WHERE customer_id = %d AND merchant_id = %d AND status = 'PENDING_APPROVAL' LIMIT 1",
+                        $repayment['customer_id'],
+                        $repayment['merchant_id']
+                    ));
+                }
             }
 
-            // Action is APPROVE:
-            $wpdb->update($table_rep, ['status' => 'COMPLETED'], ['id' => $repayment_id]);
+            if ($customer && !empty($customer['phone'])) {
+                $amt_fmt = number_format(floatval($repayment['amount']), 2);
+                $msg = "[Smart Dube] Payment Receipt Declined. Your uploaded receipt of {$amt_fmt} ETB was declined by {$store_name}. Please re-upload a valid receipt or pay via Telebirr/CBE.";
+                Smart_Dube_SMS::send_sms($customer['phone'], $msg, $customer['id'], 'PAYMENT_RECEIPT');
+            }
 
-            // Deduct customer current balance
-            $wpdb->query($wpdb->prepare("UPDATE $table_cp SET current_balance = GREATEST(0, current_balance - %f) WHERE id = %d", $repayment['amount'], $repayment['customer_id']));
+            return new WP_REST_Response([
+                'status' => 'REJECTED',
+                'message' => 'Payment receipt rejected successfully'
+            ], 200);
+        }
 
-            // Settle transaction if transaction_id exists
-            if (!empty($repayment['transaction_id'])) {
-                $tx_id = intval($repayment['transaction_id']);
-                $total_paid = floatval($wpdb->get_var($wpdb->prepare("SELECT COALESCE(SUM(amount), 0) FROM $table_rep WHERE transaction_id = %d AND status = 'COMPLETED'", $tx_id)));
-                $tx_total = floatval($wpdb->get_var($wpdb->prepare("SELECT total_amount FROM $table_tx WHERE id = %d", $tx_id)));
-                if ($total_paid >= $tx_total) {
-                    $wpdb->update($table_tx, ['status' => 'SETTLED'], ['id' => $tx_id]);
-                } else if ($total_paid > 0) {
-                    $wpdb->update($table_tx, ['status' => 'PARTIALLY_PAID'], ['id' => $tx_id]);
-                }
-            } else {
-                // If transaction_id was not set, find oldest pending transaction for customer & merchant
-                $pending_tx = $wpdb->get_row($wpdb->prepare("SELECT id, total_amount FROM $table_tx WHERE customer_id = %d AND merchant_id = %d AND status IN ('PENDING', 'PARTIALLY_PAID') ORDER BY id ASC LIMIT 1", $repayment['customer_id'], $repayment['merchant_id']), ARRAY_A);
-                if ($pending_tx) {
-                    $wpdb->update($table_rep, ['transaction_id' => $pending_tx['id']], ['id' => $repayment_id]);
-                    $wpdb->update($table_tx, ['status' => 'SETTLED'], ['id' => $pending_tx['id']]);
-                }
+        // Action is APPROVE:
+        $wpdb->update($table_rep, ['status' => 'COMPLETED'], ['id' => $repayment_id]);
+
+        // Deduct customer current balance
+        $wpdb->query($wpdb->prepare(
+            "UPDATE $table_cp SET current_balance = GREATEST(0, current_balance - %f) WHERE id = %d",
+            $repayment['amount'],
+            $repayment['customer_id']
+        ));
+
+        $new_balance = floatval($wpdb->get_var($wpdb->prepare("SELECT current_balance FROM $table_cp WHERE id = %d", $repayment['customer_id'])));
+
+        // Check if customer can be marked ACTIVE if previously restricted/overdue
+        $today = current_time('Y-m-d');
+        $remaining_overdue = intval($wpdb->get_var($wpdb->prepare(
+            "SELECT COUNT(*) FROM $table_tx WHERE customer_id = %d AND status IN ('PENDING', 'PARTIALLY_PAID') AND due_date < %s",
+            $repayment['customer_id'],
+            $today
+        )));
+        $credit_limit = floatval($customer['credit_limit'] ?? 0);
+        if ($new_balance < $credit_limit && $remaining_overdue === 0 && ($customer['status'] ?? '') !== 'BLOCKED') {
+            $wpdb->update($table_cp, ['status' => 'ACTIVE'], ['id' => $repayment['customer_id']]);
+        }
+
+        // Settle transaction if transaction_id exists
+        if (!empty($repayment['transaction_id'])) {
+            $tx_id = intval($repayment['transaction_id']);
+            $total_paid = floatval($wpdb->get_var($wpdb->prepare("SELECT COALESCE(SUM(amount), 0) FROM $table_rep WHERE transaction_id = %d AND status = 'COMPLETED'", $tx_id)));
+            $tx_total = floatval($wpdb->get_var($wpdb->prepare("SELECT total_amount FROM $table_tx WHERE id = %d", $tx_id)));
+            if ($total_paid >= $tx_total) {
+                $wpdb->update($table_tx, ['status' => 'SETTLED'], ['id' => $tx_id]);
+            } else if ($total_paid > 0) {
+                $wpdb->update($table_tx, ['status' => 'PARTIALLY_PAID'], ['id' => $tx_id]);
+            }
+        } else {
+            // If transaction_id was not set, find oldest pending transaction for customer & merchant
+            $pending_tx = $wpdb->get_row($wpdb->prepare("SELECT id, total_amount FROM $table_tx WHERE customer_id = %d AND merchant_id = %d AND status IN ('PENDING', 'PARTIALLY_PAID') ORDER BY id ASC LIMIT 1", $repayment['customer_id'], $repayment['merchant_id']), ARRAY_A);
+            if ($pending_tx) {
+                $wpdb->update($table_rep, ['transaction_id' => $pending_tx['id']], ['id' => $repayment_id]);
+                $total_paid = floatval($wpdb->get_var($wpdb->prepare("SELECT COALESCE(SUM(amount), 0) FROM $table_rep WHERE transaction_id = %d AND status = 'COMPLETED'", $pending_tx['id'])));
+                $tx_total = floatval($pending_tx['total_amount']);
+                $wpdb->update($table_tx, ['status' => ($total_paid >= $tx_total) ? 'SETTLED' : 'PARTIALLY_PAID'], ['id' => $pending_tx['id']]);
             }
         }
 
-        return new WP_REST_Response(['message' => 'Repayment approved successfully and customer debt balance updated'], 200);
+        // Update installment schedule to PAID
+        if ($wpdb->get_var("SHOW TABLES LIKE '$table_schedules'")) {
+            if (!empty($repayment['transaction_id'])) {
+                $wpdb->query($wpdb->prepare(
+                    "UPDATE $table_schedules SET status = 'PAID', paid_amount = amount WHERE transaction_id = %d AND status = 'PENDING_APPROVAL' LIMIT 1",
+                    $repayment['transaction_id']
+                ));
+            } else {
+                $wpdb->query($wpdb->prepare(
+                    "UPDATE $table_schedules SET status = 'PAID', paid_amount = amount WHERE customer_id = %d AND merchant_id = %d AND status = 'PENDING_APPROVAL' LIMIT 1",
+                    $repayment['customer_id'],
+                    $repayment['merchant_id']
+                ));
+            }
+        }
+
+        // Send confirmation SMS to customer
+        if ($customer && !empty($customer['phone'])) {
+            $amt_fmt = number_format(floatval($repayment['amount']), 2);
+            $new_bal_fmt = number_format($new_balance, 2);
+            $ref_code = $repayment['reference_code'];
+            $sms_msg = "[Smart Dube] Payment Receipt Approved! Your payment of {$amt_fmt} ETB via Receipt Upload has been verified and approved by {$store_name}. Ref: {$ref_code}. Remaining Dube Balance: {$new_bal_fmt} ETB.";
+            Smart_Dube_SMS::send_sms($customer['phone'], $sms_msg, $customer['id'], 'PAYMENT_RECEIPT');
+        }
+
+        return new WP_REST_Response([
+            'message' => 'Repayment approved successfully and customer debt balance updated',
+            'status' => 'COMPLETED',
+            'newBalance' => $new_balance
+        ], 200);
     }
 
     // 8. Send SMS Reminder
@@ -770,22 +853,260 @@ class Smart_Dube_API {
         global $wpdb;
         $user = self::get_authenticated_user($request);
         $user_id = $user ? $user['id'] : 0;
+        $user_phone = $user ? ($user['phone'] ?? '') : '';
         $params = $request->get_json_params();
 
         $table_rep = $wpdb->prefix . 'dube_repayments';
         $table_tx  = $wpdb->prefix . 'dube_credit_transactions';
         $table_cp  = $wpdb->prefix . 'dube_customer_profiles';
         $table_m   = $wpdb->prefix . 'dube_merchants';
+        $table_schedules = $wpdb->prefix . 'dube_installment_schedules';
 
         $transaction_id = !empty($params['transactionId']) ? intval($params['transactionId']) : null;
         $customer_id    = intval($params['customerId'] ?? 0);
         $merchant_id    = intval($params['merchantId'] ?? 0);
         $amount         = floatval($params['amount'] ?? 0);
-        $gateway        = sanitize_text_field($params['paymentGateway'] ?? 'RECEIPT_UPLOAD');
-        $ref_code       = sanitize_text_field($params['referenceCode'] ?? '');
+        $gateway        = strtoupper(sanitize_text_field($params['paymentGateway'] ?? 'TELEBIRR'));
+        $ref_code       = trim(sanitize_text_field($params['referenceCode'] ?? ''));
         $receipt_url    = sanitize_text_field($params['receiptUrl'] ?? null);
         $installment_no = !empty($params['installmentNo']) ? intval($params['installmentNo']) : null;
+        $is_multi_merchant = !empty($params['isMultiMerchant']);
 
+        if ($amount <= 0) {
+            return new WP_REST_Response(['error' => 'Valid repayment amount is required.'], 400);
+        }
+
+        // 1. Strict Validation: Reference Code is Required
+        if (empty($ref_code)) {
+            return new WP_REST_Response(['error' => 'Transaction reference code is strictly required. Test sample entries are restricted.'], 400);
+        }
+
+        $clean_ref = strtoupper($ref_code);
+        $is_valid_format = false;
+
+        if ($gateway === 'TELEBIRR') {
+            $is_valid_format = preg_match('/^(FT[A-Z0-9]{6,16}|TB[0-9]{6,16}|TELEBIRR-[0-9]{6,16})$/i', $clean_ref);
+        } elseif ($gateway === 'CBE_BIRR') {
+            $is_valid_format = preg_match('/^(CBE[0-9]{6,16}|TX[0-9]{6,16}|CBEBIRR-[0-9]{6,16})$/i', $clean_ref);
+        } elseif ($gateway === 'CHAPA') {
+            $is_valid_format = preg_match('/^(CP-[0-9]{6,16}|CHAPA-[0-9]{6,16}|CHP_[A-Z0-9]{6,16})$/i', $clean_ref);
+        } elseif ($gateway === 'RECEIPT_UPLOAD') {
+            $dummy_patterns = '/^(TEST|DUMMY|SAMPLE|EXAMPLE|12345678|ABCDEFGH|AAAAAAAA)$/i';
+            $is_valid_format = (strlen($clean_ref) >= 8) && !preg_match($dummy_patterns, $clean_ref) && preg_match('/^[A-Z0-9_\-]{8,30}$/i', $clean_ref);
+        } else {
+            $is_valid_format = (strlen($clean_ref) >= 8);
+        }
+
+        if (!$is_valid_format) {
+            $examples = [
+                'TELEBIRR' => 'FT2408181234 or TB88491290',
+                'CBE_BIRR' => 'CBE84791024 or TX84719283',
+                'CHAPA' => 'CP-99018274 or CHAPA-984712',
+                'RECEIPT_UPLOAD' => 'FT26230BITM72 (Telebirr) or CBE84791024 (CBE)'
+            ];
+            $ex = $examples[$gateway] ?? 'FT2408181234';
+            return new WP_REST_Response([
+                'error' => "Invalid {$gateway} reference code \"{$ref_code}\". Enter your official transaction ID from your payment SMS (e.g. {$ex})."
+            ], 400);
+        }
+
+        // 2. Strict Validation for Receipt Upload
+        $is_upload = ($gateway === 'RECEIPT_UPLOAD');
+        if ($is_upload && empty($receipt_url)) {
+            return new WP_REST_Response([
+                'error' => 'A payment receipt screenshot photo is strictly required for receipt upload verification.'
+            ], 400);
+        }
+
+        // 3. Prevent duplicate reference code (case-insensitive)
+        $existing = $wpdb->get_row($wpdb->prepare(
+            "SELECT id, status FROM $table_rep WHERE UPPER(TRIM(reference_code)) = %s AND status IN ('PENDING', 'COMPLETED') LIMIT 1",
+            $clean_ref
+        ), ARRAY_A);
+        if ($existing) {
+            $state_str = ($existing['status'] === 'PENDING') ? 'pending approval review' : 'already completed';
+            return new WP_REST_Response([
+                'error' => "Transaction reference code \"{$ref_code}\" has already been submitted and is {$state_str}. Duplicates are restricted."
+            ], 400);
+        }
+
+        // 4. Prevent duplicate receipt image screenshot
+        if ($is_upload && !empty($receipt_url)) {
+            $existing_img = $wpdb->get_row($wpdb->prepare(
+                "SELECT id, status FROM $table_rep WHERE receipt_url = %s AND status IN ('PENDING', 'COMPLETED') LIMIT 1",
+                $receipt_url
+            ), ARRAY_A);
+            if ($existing_img) {
+                return new WP_REST_Response([
+                    'error' => 'This exact receipt screenshot image has already been uploaded for another repayment. Please upload the correct receipt.'
+                ], 400);
+            }
+        }
+
+        // 5. Multi-Merchant Repayment branch
+        if ($is_multi_merchant) {
+            $active_profiles = $wpdb->get_results($wpdb->prepare(
+                "SELECT cp.*, m.store_name, m.phone as merchant_phone 
+                 FROM $table_cp cp 
+                 JOIN $table_m m ON cp.merchant_id = m.id 
+                 WHERE (cp.user_id = %d OR cp.phone = %s) AND cp.current_balance > 0 
+                 ORDER BY cp.current_balance DESC",
+                $user_id,
+                $user_phone
+            ), ARRAY_A);
+
+            if (empty($active_profiles)) {
+                return new WP_REST_Response(['error' => 'No active outstanding merchant balances found to repay.'], 400);
+            }
+
+            $total_debt = 0;
+            foreach ($active_profiles as $p) {
+                $total_debt += floatval($p['current_balance']);
+            }
+            $total_pay = min($amount, $total_debt);
+            $remaining_pay = $total_pay;
+            $allocations = [];
+            $count = count($active_profiles);
+
+            for ($i = 0; $i < $count; $i++) {
+                $p = $active_profiles[$i];
+                $p_bal = floatval($p['current_balance']);
+                if ($i === $count - 1) {
+                    $p_amount = max(0, round($remaining_pay, 2));
+                } else {
+                    $p_amount = max(0, min($p_bal, round(($p_bal / $total_debt) * $total_pay, 2)));
+                    $remaining_pay -= $p_amount;
+                }
+                if ($p_amount > 0) {
+                    $allocations[] = [
+                        'profile' => $p,
+                        'amount' => $p_amount
+                    ];
+                }
+            }
+
+            $initial_status = $is_upload ? 'PENDING' : 'COMPLETED';
+            $master_ref = 'PAY-MULTI-' . time() . '-' . wp_rand(1000, 9999);
+            $results = [];
+
+            for ($i = 0; $i < count($allocations); $i++) {
+                $alloc = $allocations[$i];
+                $prof = $alloc['profile'];
+                $p_amt = $alloc['amount'];
+                $sub_ref = ($i === 0) ? $clean_ref : "{$clean_ref}-" . ($i + 1);
+                $item_rep_ref = "{$master_ref}-" . ($i + 1);
+
+                // Find target transaction
+                $target_tx = $wpdb->get_row($wpdb->prepare(
+                    "SELECT id, total_amount FROM $table_tx WHERE customer_id = %d AND status IN ('PENDING', 'PARTIALLY_PAID') ORDER BY created_at ASC LIMIT 1",
+                    $prof['id']
+                ), ARRAY_A);
+                if (!$target_tx) {
+                    $target_tx = $wpdb->get_row($wpdb->prepare(
+                        "SELECT id, total_amount FROM $table_tx WHERE customer_id = %d ORDER BY created_at DESC LIMIT 1",
+                        $prof['id']
+                    ), ARRAY_A);
+                }
+                $t_tx_id = $target_tx ? intval($target_tx['id']) : null;
+
+                $wpdb->insert($table_rep, [
+                    'repayment_ref'   => $item_rep_ref,
+                    'transaction_id'  => $t_tx_id,
+                    'customer_id'     => $prof['id'],
+                    'merchant_id'     => $prof['merchant_id'],
+                    'amount'          => $p_amt,
+                    'payment_gateway' => $gateway,
+                    'reference_code'  => $sub_ref,
+                    'receipt_url'     => $receipt_url,
+                    'status'          => $initial_status,
+                    'created_at'      => current_time('mysql')
+                ]);
+                $item_rep_id = $wpdb->insert_id;
+
+                $new_prof_bal = floatval($prof['current_balance']);
+                if (!$is_upload) {
+                    $wpdb->query($wpdb->prepare("UPDATE $table_cp SET current_balance = GREATEST(0, current_balance - %f) WHERE id = %d", $p_amt, $prof['id']));
+                    $new_prof_bal = max(0, $new_prof_bal - $p_amt);
+
+                    if ($t_tx_id) {
+                        $tx_paid = floatval($wpdb->get_var($wpdb->prepare("SELECT COALESCE(SUM(amount), 0) FROM $table_rep WHERE transaction_id = %d AND status = 'COMPLETED'", $t_tx_id)));
+                        $tx_tot = floatval($target_tx['total_amount']);
+                        $wpdb->update($table_tx, ['status' => ($tx_paid >= $tx_tot) ? 'SETTLED' : 'PARTIALLY_PAID'], ['id' => $t_tx_id]);
+                    }
+                }
+
+                $results[] = [
+                    'id'              => $item_rep_id,
+                    'repaymentRef'    => $item_rep_ref,
+                    'merchantId'      => $prof['merchant_id'],
+                    'storeName'       => $prof['store_name'],
+                    'customerId'      => $prof['id'],
+                    'customerName'    => $prof['full_name'],
+                    'customerPhone'   => $prof['phone'],
+                    'amount'          => $p_amt,
+                    'referenceCode'   => $sub_ref,
+                    'newBalance'      => $new_prof_bal
+                ];
+
+                // Send SMS for each allocation
+                if ($is_upload) {
+                    $cust_msg = "[Smart Dube] Dear {$prof['full_name']}, your payment receipt of " . number_format($p_amt, 2) . " ETB for {$prof['store_name']} has been uploaded. Status: PENDING merchant approval.";
+                    Smart_Dube_SMS::send_sms($prof['phone'], $cust_msg, $prof['id'], 'PAYMENT_RECEIPT');
+                } else {
+                    $cust_msg = "[Smart Dube] Dear {$prof['full_name']}, your multi-store schedule payment of " . number_format($p_amt, 2) . " ETB to {$prof['store_name']} via {$gateway} is CONFIRMED. Ref: {$sub_ref}.";
+                    Smart_Dube_SMS::send_sms($prof['phone'], $cust_msg, $prof['id'], 'PAYMENT_RECEIPT');
+
+                    if (!empty($prof['merchant_phone'])) {
+                        $merch_msg = "[Smart Dube] Payment Receipt: Customer {$prof['full_name']} has paid " . number_format($p_amt, 2) . " ETB to your store via {$gateway}. Ref: {$sub_ref}.";
+                        Smart_Dube_SMS::send_sms($prof['merchant_phone'], $merch_msg, $prof['id'], 'PAYMENT_RECEIPT');
+                    }
+                }
+            }
+
+            // If installment schedule was specified
+            if ($installment_no && $wpdb->get_var("SHOW TABLES LIKE '$table_schedules'")) {
+                $wpdb->query($wpdb->prepare(
+                    "UPDATE $table_schedules SET status = %s, paid_amount = %f WHERE customer_id IN (SELECT id FROM $table_cp WHERE user_id = %d OR phone = %s) AND installment_number = %d",
+                    ($initial_status === 'COMPLETED') ? 'PAID' : 'PENDING_APPROVAL',
+                    $total_pay,
+                    $user_id,
+                    $user_phone,
+                    $installment_no
+                ));
+            }
+
+            return new WP_REST_Response([
+                'message' => $is_upload
+                    ? 'Payment receipt submitted successfully and is awaiting merchant verification'
+                    : 'Payment settlement completed successfully',
+                'isMultiMerchant' => true,
+                'repaymentRef'    => $master_ref,
+                'amount'          => $total_pay,
+                'paymentGateway'  => $gateway,
+                'referenceCode'   => $clean_ref,
+                'status'          => $initial_status,
+                'receipt' => [
+                    'id'              => $results[0]['id'] ?? 0,
+                    'repaymentRef'    => $master_ref,
+                    'repayment_ref'   => $master_ref,
+                    'refCode'         => $clean_ref,
+                    'referenceCode'   => $clean_ref,
+                    'amount'          => $total_pay,
+                    'gateway'         => $gateway,
+                    'payment_gateway' => $gateway,
+                    'status'          => $initial_status,
+                    'receiptUrl'      => $receipt_url,
+                    'receipt_url'     => $receipt_url,
+                    'storeName'       => 'Multiple Merchants',
+                    'store_name'      => 'Multiple Merchants',
+                    'created_at'      => current_time('mysql'),
+                    'isMultiMerchant' => true,
+                    'allocations'     => $results
+                ]
+            ], 201);
+        }
+
+        // 6. Single Merchant / Single Transaction Repayment
         // Auto-resolve merchant_id and customer_id if missing
         if ($transaction_id && (!$merchant_id || !$customer_id)) {
             $tx_row = $wpdb->get_row($wpdb->prepare("SELECT customer_id, merchant_id FROM $table_tx WHERE id = %d", $transaction_id), ARRAY_A);
@@ -803,17 +1124,13 @@ class Smart_Dube_API {
             $merchant_id = intval($wpdb->get_var($wpdb->prepare("SELECT merchant_id FROM $table_cp WHERE id = %d", $customer_id)));
         }
 
-        $store_name = 'Merchant Store';
-        if ($merchant_id) {
-            $store_name = $wpdb->get_var($wpdb->prepare("SELECT store_name FROM $table_m WHERE id = %d", $merchant_id)) ?: 'Merchant Store';
-        }
+        $customer = $customer_id ? $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE id = %d", $customer_id), ARRAY_A) : null;
+        $merchant = $merchant_id ? $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_m WHERE id = %d", $merchant_id), ARRAY_A) : null;
+        $store_name = $merchant ? $merchant['store_name'] : 'Merchant Store';
+        $customer_name = $customer ? $customer['full_name'] : 'Customer';
+        $customer_phone = $customer ? $customer['phone'] : $user_phone;
 
-        if ($amount <= 0) {
-            return new WP_REST_Response(['error' => 'Valid repayment amount is required.'], 400);
-        }
-
-        $rep_ref = 'PAY-' . strtoupper(wp_generate_password(6, false));
-        $is_upload = ($gateway === 'RECEIPT_UPLOAD');
+        $rep_ref = 'PAY-' . strtoupper(wp_generate_password(8, false));
         $status = $is_upload ? 'PENDING' : 'COMPLETED';
 
         $wpdb->insert($table_rep, [
@@ -823,20 +1140,35 @@ class Smart_Dube_API {
             'merchant_id'     => $merchant_id,
             'amount'          => $amount,
             'payment_gateway' => $gateway,
-            'reference_code'  => $ref_code,
+            'reference_code'  => $clean_ref,
             'receipt_url'     => $receipt_url,
             'status'          => $status,
             'created_at'      => current_time('mysql')
         ]);
 
         $repayment_id = $wpdb->insert_id;
+        $new_balance = floatval($customer ? $customer['current_balance'] : 0);
 
         // If instant digital payment (Telebirr, CBE Birr, Chapa) - complete settlement immediately
         if (!$is_upload) {
             // Deduct customer current balance
             if ($customer_id) {
                 $wpdb->query($wpdb->prepare("UPDATE $table_cp SET current_balance = GREATEST(0, current_balance - %f) WHERE id = %d", $amount, $customer_id));
+                $new_balance = floatval($wpdb->get_var($wpdb->prepare("SELECT current_balance FROM $table_cp WHERE id = %d", $customer_id)));
+
+                // Check overdue items and reactivate customer if debt cleared
+                $today = current_time('Y-m-d');
+                $rem_overdue = intval($wpdb->get_var($wpdb->prepare(
+                    "SELECT COUNT(*) FROM $table_tx WHERE customer_id = %d AND status IN ('PENDING', 'PARTIALLY_PAID') AND due_date < %s",
+                    $customer_id,
+                    $today
+                )));
+                $c_limit = floatval($customer['credit_limit'] ?? 0);
+                if ($new_balance < $c_limit && $rem_overdue === 0 && ($customer['status'] ?? '') !== 'BLOCKED') {
+                    $wpdb->update($table_cp, ['status' => 'ACTIVE'], ['id' => $customer_id]);
+                }
             }
+
             // Settle transaction
             if ($transaction_id) {
                 $paid_sum = floatval($wpdb->get_var($wpdb->prepare("SELECT COALESCE(SUM(amount), 0) FROM $table_rep WHERE transaction_id = %d AND status = 'COMPLETED'", $transaction_id)));
@@ -846,13 +1178,21 @@ class Smart_Dube_API {
                 } else if ($paid_sum > 0) {
                     $wpdb->update($table_tx, ['status' => 'PARTIALLY_PAID'], ['id' => $transaction_id]);
                 }
+            } else if ($customer_id && $merchant_id) {
+                // Find oldest pending transaction for customer & merchant
+                $pending_tx = $wpdb->get_row($wpdb->prepare("SELECT id, total_amount FROM $table_tx WHERE customer_id = %d AND merchant_id = %d AND status IN ('PENDING', 'PARTIALLY_PAID') ORDER BY id ASC LIMIT 1", $customer_id, $merchant_id), ARRAY_A);
+                if ($pending_tx) {
+                    $wpdb->update($table_rep, ['transaction_id' => $pending_tx['id']], ['id' => $repayment_id]);
+                    $paid_sum = floatval($wpdb->get_var($wpdb->prepare("SELECT COALESCE(SUM(amount), 0) FROM $table_rep WHERE transaction_id = %d AND status = 'COMPLETED'", $pending_tx['id'])));
+                    $tx_total = floatval($pending_tx['total_amount']);
+                    $wpdb->update($table_tx, ['status' => ($paid_sum >= $tx_total) ? 'SETTLED' : 'PARTIALLY_PAID'], ['id' => $pending_tx['id']]);
+                }
             }
         }
 
         // If installment specified, mark that installment
-        if ($installment_no && $transaction_id) {
-            $table_schedules = $wpdb->prefix . 'dube_installment_schedules';
-            if ($wpdb->get_var("SHOW TABLES LIKE '$table_schedules'")) {
+        if ($installment_no && $wpdb->get_var("SHOW TABLES LIKE '$table_schedules'")) {
+            if ($transaction_id) {
                 $wpdb->update($table_schedules, [
                     'status' => ($status === 'COMPLETED') ? 'PAID' : 'PENDING_APPROVAL',
                     'paid_amount' => $amount
@@ -860,6 +1200,36 @@ class Smart_Dube_API {
                     'transaction_id' => $transaction_id,
                     'installment_number' => $installment_no
                 ]);
+            } else if ($customer_id) {
+                $wpdb->update($table_schedules, [
+                    'status' => ($status === 'COMPLETED') ? 'PAID' : 'PENDING_APPROVAL',
+                    'paid_amount' => $amount
+                ], [
+                    'customer_id' => $customer_id,
+                    'installment_number' => $installment_no
+                ]);
+            }
+        }
+
+        // Send SMS notifications
+        $amt_fmt = number_format($amount, 2);
+        if ($is_upload) {
+            if (!empty($customer_phone)) {
+                $msg = "[Smart Dube] Dear {$customer_name}, your payment receipt of {$amt_fmt} ETB has been uploaded to {$store_name}. Status: PENDING merchant approval.";
+                Smart_Dube_SMS::send_sms($customer_phone, $msg, $customer_id, 'PAYMENT_RECEIPT');
+            }
+        } else {
+            // Instant payment SMS to customer
+            if (!empty($customer_phone)) {
+                $rem_fmt = number_format($new_balance, 2);
+                $msg = "[Smart Dube] Payment Receipt: Dear {$customer_name}, your payment of {$amt_fmt} ETB to {$store_name} via {$gateway} has been successfully settled. Ref: {$clean_ref}. Remaining Balance: {$rem_fmt} ETB.";
+                Smart_Dube_SMS::send_sms($customer_phone, $msg, $customer_id, 'PAYMENT_RECEIPT');
+            }
+
+            // Notification to merchant
+            if ($merchant && !empty($merchant['phone'])) {
+                $m_msg = "[Smart Dube] Payment Notice: Customer {$customer_name} paid {$amt_fmt} ETB via {$gateway}. Ref: {$clean_ref}.";
+                Smart_Dube_SMS::send_sms($merchant['phone'], $m_msg, $customer_id, 'PAYMENT_RECEIPT');
             }
         }
 
@@ -872,8 +1242,8 @@ class Smart_Dube_API {
                 'id'              => $repayment_id,
                 'repaymentRef'    => $rep_ref,
                 'repayment_ref'   => $rep_ref,
-                'refCode'         => $ref_code,
-                'referenceCode'   => $ref_code,
+                'refCode'         => $clean_ref,
+                'referenceCode'   => $clean_ref,
                 'amount'          => $amount,
                 'gateway'         => $gateway,
                 'payment_gateway' => $gateway,
@@ -885,6 +1255,7 @@ class Smart_Dube_API {
                 'transactionId'   => $transaction_id,
                 'storeName'       => $store_name,
                 'store_name'      => $store_name,
+                'remainingBalance'=> $new_balance,
                 'created_at'      => current_time('mysql')
             ]
         ], 201);
