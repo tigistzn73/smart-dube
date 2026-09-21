@@ -58,6 +58,12 @@ class Smart_Dube_API {
             'permission_callback' => '__return_true'
         ]);
 
+        register_rest_route($namespace, '/merchant/customers/(?P<id>\d+)', [
+            'methods'  => ['PUT', 'POST'],
+            'callback' => [__CLASS__, 'update_customer_profile'],
+            'permission_callback' => '__return_true'
+        ]);
+
         register_rest_route($namespace, '/merchant/transactions', [
             'methods'  => ['GET', 'POST'],
             'callback' => [__CLASS__, 'handle_merchant_transactions'],
@@ -432,23 +438,201 @@ class Smart_Dube_API {
         $merchant_id = $merchant ? $merchant['id'] : 1;
 
         $table_cp = $wpdb->prefix . 'dube_customer_profiles';
+        $table_users = $wpdb->prefix . 'dube_users';
+        $table_tx = $wpdb->prefix . 'dube_credit_transactions';
 
         if ($request->get_method() === 'POST') {
             $params = $request->get_json_params();
+            $full_name = sanitize_text_field($params['fullName'] ?? '');
+            $raw_phone = trim($params['phone'] ?? '');
+            $normalized_phone = self::normalize_phone($raw_phone);
+            $clean_digits = preg_replace('/[^0-9]/', '', $raw_phone);
+            $last_9 = strlen($clean_digits) >= 9 ? substr($clean_digits, -9) : $clean_digits;
+
+            if (empty($full_name) || empty($raw_phone)) {
+                return new WP_REST_Response(['error' => 'Customer name and phone number are required.'], 400);
+            }
+
+            // Check if phone already registered for this merchant
+            $existing = $wpdb->get_row($wpdb->prepare(
+                "SELECT id FROM $table_cp WHERE merchant_id = %d AND (phone = %s OR phone = %s OR phone LIKE %s) LIMIT 1",
+                $merchant_id,
+                $normalized_phone,
+                $raw_phone,
+                '%' . $wpdb->esc_like($last_9)
+            ));
+            if ($existing) {
+                return new WP_REST_Response(['error' => 'A customer profile with this phone number already exists in your ledger.'], 400);
+            }
+
+            // Link existing user if registered
+            $linked_user = $wpdb->get_row($wpdb->prepare(
+                "SELECT id, photo_url FROM $table_users WHERE phone = %s OR phone = %s OR phone LIKE %s LIMIT 1",
+                $normalized_phone,
+                $raw_phone,
+                '%' . $wpdb->esc_like($last_9)
+            ), ARRAY_A);
+
+            $limit = !empty($params['creditLimit']) ? floatval($params['creditLimit']) : 5000.00;
+            $photo_url = sanitize_text_field($params['photoUrl'] ?? '');
+            if (empty($photo_url) && !empty($linked_user['photo_url'])) {
+                $photo_url = $linked_user['photo_url'];
+            }
+            if (empty($photo_url)) {
+                $photo_url = "https://api.dicebear.com/7.x/avataaars/svg?seed=" . urlencode($full_name);
+            }
+
             $wpdb->insert($table_cp, [
                 'merchant_id' => $merchant_id,
-                'full_name' => sanitize_text_field($params['fullName'] ?? ''),
-                'phone' => sanitize_text_field($params['phone'] ?? ''),
+                'user_id' => $linked_user ? intval($linked_user['id']) : null,
+                'full_name' => $full_name,
+                'phone' => $normalized_phone,
                 'fayda_id' => sanitize_text_field($params['faydaId'] ?? ''),
-                'credit_limit' => floatval($params['creditLimit'] ?? 5000),
+                'photo_url' => $photo_url,
+                'credit_limit' => $limit,
                 'current_balance' => 0.00,
-                'status' => 'ACTIVE'
+                'status' => 'ACTIVE',
+                'created_at' => current_time('mysql')
             ]);
-            return new WP_REST_Response(['message' => 'Customer profile created', 'id' => $wpdb->insert_id], 201);
+            $customer_id = $wpdb->insert_id;
+
+            // Welcome SMS
+            $store_name = $merchant['store_name'] ?? 'Merchant Store';
+            $limit_fmt = number_format($limit, 2);
+            Smart_Dube_SMS::send_sms(
+                $normalized_phone,
+                "[Smart Dube] Welcome {$full_name}! You have been registered for Dube credit at {$store_name} with a max limit of {$limit_fmt} ETB.",
+                $customer_id,
+                'CREDIT_ISSUED'
+            );
+
+            return new WP_REST_Response([
+                'message' => 'Customer credit profile created successfully',
+                'id' => $customer_id,
+                'customer' => [
+                    'id' => $customer_id,
+                    'merchantId' => $merchant_id,
+                    'fullName' => $full_name,
+                    'phone' => $normalized_phone,
+                    'creditLimit' => $limit,
+                    'currentBalance' => 0.00,
+                    'status' => 'ACTIVE'
+                ]
+            ], 201);
         }
 
-        $customers = $wpdb->get_results($wpdb->prepare("SELECT * FROM $table_cp WHERE merchant_id = %d", $merchant_id), ARRAY_A);
-        return new WP_REST_Response(['customers' => $customers], 200);
+        $customers = $wpdb->get_results($wpdb->prepare(
+            "SELECT c.*, 
+                (c.credit_limit - c.current_balance) as available_credit,
+                (SELECT COUNT(*) FROM $table_tx ct WHERE ct.customer_id = c.id AND ct.status IN ('PENDING', 'PARTIALLY_PAID')) as pending_transactions_count,
+                (SELECT COUNT(*) FROM $table_tx ct WHERE ct.customer_id = c.id AND ct.status IN ('PENDING', 'PARTIALLY_PAID') AND ct.due_date < CURRENT_DATE()) as overdue_count
+             FROM $table_cp c 
+             WHERE c.merchant_id = %d 
+             ORDER BY c.created_at DESC", 
+            $merchant_id
+        ), ARRAY_A);
+
+        if (!empty($customers)) {
+            foreach ($customers as &$c) {
+                $c['credit_limit'] = floatval($c['credit_limit'] ?? 0);
+                $c['current_balance'] = floatval($c['current_balance'] ?? 0);
+                $c['available_credit'] = floatval($c['available_credit'] ?? 0);
+                $c['pending_transactions_count'] = intval($c['pending_transactions_count'] ?? 0);
+                $c['overdue_count'] = intval($c['overdue_count'] ?? 0);
+            }
+            unset($c);
+        }
+
+        return new WP_REST_Response(['customers' => $customers ?: []], 200);
+    }
+
+    public static function update_customer_profile($request) {
+        global $wpdb;
+        $customer_id = intval($request['id']);
+        $params = $request->get_json_params();
+
+        $table_cp = $wpdb->prefix . 'dube_customer_profiles';
+        $customer = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE id = %d", $customer_id), ARRAY_A);
+        if (!$customer) {
+            return new WP_REST_Response(['error' => 'Customer credit profile not found.'], 404);
+        }
+
+        $data_to_update = [];
+        if (isset($params['creditLimit'])) {
+            $data_to_update['credit_limit'] = floatval($params['creditLimit']);
+        }
+        if (isset($params['status'])) {
+            $data_to_update['status'] = sanitize_text_field($params['status']);
+        }
+
+        if (!empty($data_to_update)) {
+            $wpdb->update($table_cp, $data_to_update, ['id' => $customer_id]);
+        }
+
+        return new WP_REST_Response(['message' => 'Customer credit profile updated successfully.'], 200);
+    }
+
+    // Helper: Evaluate Customer Credit Risk & auto-enforce bounds
+    public static function evaluate_credit_risk($customer_id, $requested_amount = 0) {
+        global $wpdb;
+        $table_cp = $wpdb->prefix . 'dube_customer_profiles';
+        $table_tx = $wpdb->prefix . 'dube_credit_transactions';
+
+        $customer = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE id = %d", $customer_id), ARRAY_A);
+        if (!$customer) {
+            return ['allowed' => false, 'reason' => 'Customer profile not found.'];
+        }
+
+        if (($customer['status'] ?? '') === 'BLOCKED') {
+            return ['allowed' => false, 'reason' => 'Customer account is explicitly BLOCKED by merchant due to non-repayment.'];
+        }
+
+        // Check for overdue transactions
+        $today = current_time('Y-m-d');
+        $overdue_tx = $wpdb->get_results($wpdb->prepare(
+            "SELECT * FROM $table_tx WHERE customer_id = %d AND status IN ('PENDING', 'PARTIALLY_PAID') AND due_date < %s",
+            $customer_id,
+            $today
+        ), ARRAY_A);
+
+        if (!empty($overdue_tx)) {
+            $count = count($overdue_tx);
+            if (($customer['status'] ?? '') === 'ACTIVE') {
+                $wpdb->update($table_cp, ['status' => 'RESTRICTED'], ['id' => $customer_id]);
+            }
+            return [
+                'allowed' => false,
+                'reason' => "Credit restricted: Customer has {$count} overdue Dube ledger item(s) past repayment deadline.",
+                'isOverdue' => true,
+                'overdueCount' => $count
+            ];
+        }
+
+        // Check credit limit
+        $current_bal = floatval($customer['current_balance'] ?? 0);
+        $credit_limit = floatval($customer['credit_limit'] ?? 0);
+        $projected_bal = $current_bal + floatval($requested_amount);
+
+        if ($projected_bal > $credit_limit) {
+            $available = max(0, $credit_limit - $current_bal);
+            $req_fmt = number_format($requested_amount, 2);
+            $avail_fmt = number_format($available, 2);
+            $limit_fmt = number_format($credit_limit, 2);
+            return [
+                'allowed' => false,
+                'reason' => "Requested amount ({$req_fmt} ETB) exceeds available credit limit ({$avail_fmt} ETB remaining of {$limit_fmt} ETB limit).",
+                'availableCredit' => $available,
+                'creditLimit' => $credit_limit,
+                'currentBalance' => $current_bal
+            ];
+        }
+
+        return [
+            'allowed' => true,
+            'reason' => 'Credit check passed successfully.',
+            'availableCredit' => max(0, $credit_limit - $current_bal),
+            'projectedBalance' => $projected_bal
+        ];
     }
 
     // 6. Merchant Transactions list & creation
@@ -467,6 +651,16 @@ class Smart_Dube_API {
             $customer_id = intval($params['customerId']);
             $total_amount = floatval($params['totalAmount']);
             $items_json = json_encode($params['items'] ?? []);
+
+            // 1. Credit Risk Assessment & Limit Enforcement
+            $risk = self::evaluate_credit_risk($customer_id, $total_amount);
+            if (!$risk['allowed']) {
+                return new WP_REST_Response([
+                    'error' => 'Credit Transaction Blocked by Risk Assessment Engine',
+                    'reason' => $risk['reason'],
+                    'details' => $risk
+                ], 400);
+            }
 
             $tx_ref = 'DUBE-' . strtoupper(wp_generate_password(6, false));
             $wpdb->insert($table_tx, [
@@ -581,8 +775,27 @@ class Smart_Dube_API {
             return new WP_REST_Response(['error' => 'Repayment record not found.'], 404);
         }
 
+        // Auto-heal missing merchant_id if needed
+        if (empty($repayment['merchant_id'])) {
+            if (!empty($repayment['transaction_id'])) {
+                $m_id = $wpdb->get_var($wpdb->prepare("SELECT merchant_id FROM $table_tx WHERE id = %d", $repayment['transaction_id']));
+                if ($m_id) {
+                    $repayment['merchant_id'] = intval($m_id);
+                    $wpdb->update($table_rep, ['merchant_id' => $repayment['merchant_id']], ['id' => $repayment_id]);
+                }
+            }
+            if (empty($repayment['merchant_id']) && !empty($repayment['customer_id'])) {
+                $m_id = $wpdb->get_var($wpdb->prepare("SELECT merchant_id FROM $table_cp WHERE id = %d", $repayment['customer_id']));
+                if ($m_id) {
+                    $repayment['merchant_id'] = intval($m_id);
+                    $wpdb->update($table_rep, ['merchant_id' => $repayment['merchant_id']], ['id' => $repayment_id]);
+                }
+            }
+        }
+
+        $table_users = $wpdb->prefix . 'dube_users';
         $customer = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE id = %d", $repayment['customer_id']), ARRAY_A);
-        $merchant = $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_m WHERE id = %d", $repayment['merchant_id']), ARRAY_A);
+        $merchant = $wpdb->get_row($wpdb->prepare("SELECT m.*, u.phone FROM $table_m m LEFT JOIN $table_users u ON m.user_id = u.id WHERE m.id = %d", $repayment['merchant_id']), ARRAY_A);
         $store_name = $merchant ? $merchant['store_name'] : 'Merchant Store';
 
         if ($action === 'REJECT') {
@@ -709,30 +922,40 @@ class Smart_Dube_API {
         global $wpdb;
         $user = self::get_authenticated_user($request);
         $user_id = $user ? $user['id'] : 4;
+        $raw_phone = $user ? ($user['phone'] ?? '') : '';
+        $clean_digits = preg_replace('/[^0-9]/', '', $raw_phone);
+        $normalized_phone = self::normalize_phone($raw_phone);
+        $last_9 = strlen($clean_digits) >= 9 ? substr($clean_digits, -9) : $clean_digits;
 
         $table_cp = $wpdb->prefix . 'dube_customer_profiles';
         $table_merchants = $wpdb->prefix . 'dube_merchants';
         $table_tx = $wpdb->prefix . 'dube_credit_transactions';
         $table_rep = $wpdb->prefix . 'dube_repayments';
+        $table_sms = $wpdb->prefix . 'dube_sms_notifications';
+        $table_schedules = $wpdb->prefix . 'dube_installment_schedules';
 
         $profiles = $wpdb->get_results($wpdb->prepare(
             "SELECT cp.*, m.store_name, m.address as store_address 
              FROM $table_cp cp 
              JOIN $table_merchants m ON cp.merchant_id = m.id 
-             WHERE cp.user_id = %d OR cp.phone = %s",
+             WHERE cp.user_id = %d OR cp.phone = %s OR cp.phone = %s OR cp.phone LIKE %s",
             $user_id,
-            $user ? $user['phone'] : ''
+            $raw_phone,
+            $normalized_phone,
+            '%' . $wpdb->esc_like($last_9)
         ), ARRAY_A);
 
-        $transactions = $wpdb->get_results($wpdb->prepare(
+        $profile_ids = !empty($profiles) ? wp_list_pluck($profiles, 'id') : [];
+        $id_placeholders = !empty($profile_ids) ? implode(',', array_map('intval', $profile_ids)) : '0';
+
+        $transactions = $wpdb->get_results(
             "SELECT tx.*, m.store_name 
              FROM $table_tx tx 
              LEFT JOIN $table_merchants m ON tx.merchant_id = m.id 
-             WHERE tx.customer_id IN (SELECT id FROM $table_cp WHERE user_id = %d OR phone = %s)
+             WHERE tx.customer_id IN ($id_placeholders)
              ORDER BY tx.id DESC", 
-            $user_id,
-            $user ? $user['phone'] : ''
-        ), ARRAY_A);
+            ARRAY_A
+        );
 
         if (!empty($transactions)) {
             foreach ($transactions as &$tx) {
@@ -761,17 +984,16 @@ class Smart_Dube_API {
             $transactions = [];
         }
 
-        $repayments = $wpdb->get_results($wpdb->prepare(
+        $repayments = $wpdb->get_results(
             "SELECT rep.*, COALESCE(m.store_name, cp_m.store_name, 'Merchant Store') as store_name 
              FROM $table_rep rep 
              LEFT JOIN $table_merchants m ON rep.merchant_id = m.id 
              LEFT JOIN $table_cp cp ON rep.customer_id = cp.id 
              LEFT JOIN $table_merchants cp_m ON cp.merchant_id = cp_m.id 
-             WHERE rep.customer_id IN (SELECT id FROM $table_cp WHERE user_id = %d OR phone = %s)
+             WHERE rep.customer_id IN ($id_placeholders)
              ORDER BY rep.id DESC", 
-            $user_id,
-            $user ? $user['phone'] : ''
-        ), ARRAY_A);
+            ARRAY_A
+        );
 
         if (!empty($repayments)) {
             foreach ($repayments as &$r) {
@@ -792,18 +1014,31 @@ class Smart_Dube_API {
         }
         $available_credit = max(0, $total_limit - $total_balance);
 
+        // Fetch notifications
+        $sms_condition = $wpdb->prepare(
+            "(phone = %s OR phone = %s OR phone LIKE %s)",
+            $raw_phone,
+            $normalized_phone,
+            '%' . $wpdb->esc_like($last_9)
+        );
+        if (!empty($profile_ids)) {
+            $sms_condition .= " OR customer_id IN ($id_placeholders)";
+        }
+        $notifications = $wpdb->get_results(
+            "SELECT * FROM $table_sms WHERE $sms_condition ORDER BY sent_at DESC LIMIT 50",
+            ARRAY_A
+        );
+
         // Fetch active installment schedules for this customer
-        $table_schedules = $wpdb->prefix . 'dube_installment_schedules';
-        $schedules_rows = $wpdb->get_results($wpdb->prepare(
+        $schedules_rows = !empty($profile_ids) ? $wpdb->get_results(
             "SELECT s.*, m.store_name, tx.transaction_ref, tx.items_json 
              FROM $table_schedules s 
              LEFT JOIN $table_merchants m ON s.merchant_id = m.id 
              LEFT JOIN $table_tx tx ON s.transaction_id = tx.id 
-             WHERE s.customer_id IN (SELECT id FROM $table_cp WHERE user_id = %d OR phone = %s) 
+             WHERE s.customer_id IN ($id_placeholders) 
              ORDER BY s.due_date ASC",
-            $user_id,
-            $user ? $user['phone'] : ''
-        ), ARRAY_A);
+            ARRAY_A
+        ) : [];
 
         $active_schedules = [];
         if (!empty($schedules_rows)) {
@@ -843,6 +1078,7 @@ class Smart_Dube_API {
             ],
             'transactions' => $transactions,
             'repayments' => $repayments,
+            'notifications' => $notifications ?: [],
             'activeSchedules' => $active_schedules,
             'activeSchedule' => !empty($active_schedules) ? $active_schedules[0] : null
         ], 200);
@@ -939,15 +1175,19 @@ class Smart_Dube_API {
         }
 
         // 5. Multi-Merchant Repayment branch
-        if ($is_multi_merchant) {
+        if ($is_multi_merchant || (!$transaction_id && !$customer_id)) {
+            $table_users = $wpdb->prefix . 'dube_users';
             $active_profiles = $wpdb->get_results($wpdb->prepare(
-                "SELECT cp.*, m.store_name, m.phone as merchant_phone 
+                "SELECT cp.*, m.store_name, u.phone as merchant_phone 
                  FROM $table_cp cp 
                  JOIN $table_m m ON cp.merchant_id = m.id 
-                 WHERE (cp.user_id = %d OR cp.phone = %s) AND cp.current_balance > 0 
+                 LEFT JOIN $table_users u ON m.user_id = u.id
+                 WHERE (cp.user_id = %d OR cp.phone = %s OR cp.phone = %s OR cp.phone LIKE %s) AND cp.current_balance > 0 
                  ORDER BY cp.current_balance DESC",
                 $user_id,
-                $user_phone
+                $user_phone,
+                $normalized_phone,
+                '%' . $wpdb->esc_like($last_9)
             ), ARRAY_A);
 
             if (empty($active_profiles)) {
@@ -1120,7 +1360,8 @@ class Smart_Dube_API {
         }
 
         $customer = $customer_id ? $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_cp WHERE id = %d", $customer_id), ARRAY_A) : null;
-        $merchant = $merchant_id ? $wpdb->get_row($wpdb->prepare("SELECT * FROM $table_m WHERE id = %d", $merchant_id), ARRAY_A) : null;
+        $table_users = $wpdb->prefix . 'dube_users';
+        $merchant = $merchant_id ? $wpdb->get_row($wpdb->prepare("SELECT m.*, u.phone FROM $table_m m LEFT JOIN $table_users u ON m.user_id = u.id WHERE m.id = %d", $merchant_id), ARRAY_A) : null;
         $store_name = $merchant ? $merchant['store_name'] : 'Merchant Store';
         $customer_name = $customer ? $customer['full_name'] : 'Customer';
         $customer_phone = $customer ? $customer['phone'] : $user_phone;
@@ -1269,12 +1510,33 @@ class Smart_Dube_API {
             $transaction_id = !empty($params['transactionId']) ? intval($params['transactionId']) : null;
             $deadline_date_str = !empty($params['deadlineDate']) ? sanitize_text_field($params['deadlineDate']) : null;
 
-            // If deadline not explicitly passed but transactionId is, look up that transaction's due_date
-            if (!$deadline_date_str && $transaction_id) {
-                $table_tx = $wpdb->prefix . 'dube_credit_transactions';
-                $raw = $wpdb->get_var($wpdb->prepare("SELECT due_date FROM $table_tx WHERE id = %d", $transaction_id));
-                if ($raw) {
-                    $deadline_date_str = substr($raw, 0, 10); // ensure YYYY-MM-DD
+            $user = self::get_authenticated_user($request);
+            $user_id = $user ? $user['id'] : 0;
+            $user_phone = $user ? ($user['phone'] ?? '') : '';
+            $merchant_id = !empty($params['merchantId']) ? intval($params['merchantId']) : null;
+            $table_tx = $wpdb->prefix . 'dube_credit_transactions';
+            $table_cp = $wpdb->prefix . 'dube_customer_profiles';
+
+            // If deadline not explicitly passed, look up customer's earliest pending transaction due date
+            if (!$deadline_date_str) {
+                if ($transaction_id) {
+                    $raw = $wpdb->get_var($wpdb->prepare("SELECT due_date FROM $table_tx WHERE id = %d", $transaction_id));
+                    if ($raw) $deadline_date_str = substr($raw, 0, 10);
+                } elseif ($merchant_id) {
+                    $raw = $wpdb->get_var($wpdb->prepare(
+                        "SELECT ct.due_date FROM $table_tx ct JOIN $table_cp cp ON ct.customer_id = cp.id WHERE (cp.user_id = %d OR cp.phone = %s) AND ct.merchant_id = %d AND ct.status IN ('PENDING', 'PARTIALLY_PAID') AND ct.due_date IS NOT NULL ORDER BY ct.due_date ASC LIMIT 1",
+                        $user_id,
+                        $user_phone,
+                        $merchant_id
+                    ));
+                    if ($raw) $deadline_date_str = substr($raw, 0, 10);
+                } else {
+                    $raw = $wpdb->get_var($wpdb->prepare(
+                        "SELECT ct.due_date FROM $table_tx ct JOIN $table_cp cp ON ct.customer_id = cp.id WHERE (cp.user_id = %d OR cp.phone = %s) AND ct.status IN ('PENDING', 'PARTIALLY_PAID') AND ct.due_date IS NOT NULL ORDER BY ct.due_date ASC LIMIT 1",
+                        $user_id,
+                        $user_phone
+                    ));
+                    if ($raw) $deadline_date_str = substr($raw, 0, 10);
                 }
             }
 
@@ -1369,10 +1631,15 @@ class Smart_Dube_API {
         global $wpdb;
         $user = self::get_authenticated_user($request);
         $user_id = $user ? $user['id'] : 0;
+        $user_phone = $user ? ($user['phone'] ?? '') : '';
+        $clean_digits = preg_replace('/[^0-9]/', '', $user_phone);
+        $normalized_phone = self::normalize_phone($user_phone);
+        $last_9 = strlen($clean_digits) >= 9 ? substr($clean_digits, -9) : $clean_digits;
 
         $params = $request->get_json_params();
         $table_schedules = $wpdb->prefix . 'dube_installment_schedules';
         $table_cp = $wpdb->prefix . 'dube_customer_profiles';
+        $table_tx = $wpdb->prefix . 'dube_credit_transactions';
 
         $customer_id = intval($params['customerId'] ?? 0);
         $merchant_id = intval($params['merchantId'] ?? 0);
@@ -1380,11 +1647,21 @@ class Smart_Dube_API {
         $installments = $params['installments'] ?? [];
 
         if (!$customer_id && $user_id) {
-            $customer_id = intval($wpdb->get_var($wpdb->prepare("SELECT id FROM $table_cp WHERE user_id = %d LIMIT 1", $user_id)));
+            if ($merchant_id) {
+                $customer_id = intval($wpdb->get_var($wpdb->prepare(
+                    "SELECT id FROM $table_cp WHERE (user_id = %d OR phone = %s OR phone = %s OR phone LIKE %s) AND merchant_id = %d LIMIT 1",
+                    $user_id, $user_phone, $normalized_phone, '%' . $wpdb->esc_like($last_9), $merchant_id
+                )));
+            }
+            if (!$customer_id) {
+                $customer_id = intval($wpdb->get_var($wpdb->prepare(
+                    "SELECT id FROM $table_cp WHERE user_id = %d OR phone = %s OR phone = %s OR phone LIKE %s ORDER BY current_balance DESC LIMIT 1",
+                    $user_id, $user_phone, $normalized_phone, '%' . $wpdb->esc_like($last_9)
+                )));
+            }
         }
 
         if (!$merchant_id && $transaction_id) {
-            $table_tx = $wpdb->prefix . 'dube_credit_transactions';
             $merchant_id = intval($wpdb->get_var($wpdb->prepare("SELECT merchant_id FROM $table_tx WHERE id = %d", $transaction_id)));
         }
 
@@ -1416,12 +1693,23 @@ class Smart_Dube_API {
                 ]);
             }
 
-            // Synchronize the transaction's due_date to match the final installment date
+            // Synchronize the transaction due_date(s) to match the final installment date
             if ($transaction_id) {
                 $last_inst = end($installments);
                 if (!empty($last_inst['dueDate'])) {
-                    $table_tx = $wpdb->prefix . 'dube_credit_transactions';
                     $wpdb->update($table_tx, ['due_date' => sanitize_text_field($last_inst['dueDate'])], ['id' => $transaction_id]);
+                }
+            } elseif ($customer_id) {
+                $pending_txs = $wpdb->get_results($wpdb->prepare(
+                    "SELECT id FROM $table_tx WHERE customer_id = %d AND status IN ('PENDING', 'PARTIALLY_PAID') ORDER BY created_at ASC",
+                    $customer_id
+                ), ARRAY_A);
+                if (!empty($pending_txs)) {
+                    $inst_count = count($installments);
+                    for ($idx = 0; $idx < count($pending_txs); $idx++) {
+                        $inst = $installments[min($idx, $inst_count - 1)];
+                        $wpdb->update($table_tx, ['due_date' => sanitize_text_field($inst['dueDate'])], ['id' => $pending_txs[$idx]['id']]);
+                    }
                 }
             }
         }
@@ -1441,7 +1729,13 @@ class Smart_Dube_API {
         $table_rep = $wpdb->prefix . 'dube_repayments';
         $table_cp = $wpdb->prefix . 'dube_customer_profiles';
 
-        $merchants = $wpdb->get_results("SELECT m.*, u.full_name as owner_name, u.phone as owner_phone FROM $table_merchants m JOIN $table_users u ON m.user_id = u.id", ARRAY_A);
+        $merchants = $wpdb->get_results(
+            "SELECT m.*, u.full_name as owner_name, u.phone, u.phone as owner_phone, u.fayda_id, u.email 
+             FROM $table_merchants m 
+             LEFT JOIN $table_users u ON m.user_id = u.id 
+             ORDER BY m.id DESC", 
+            ARRAY_A
+        );
         
         $total_dube = $wpdb->get_var("SELECT COALESCE(SUM(total_amount), 0) FROM $table_tx");
         $total_rep = $wpdb->get_var("SELECT COALESCE(SUM(amount), 0) FROM $table_rep WHERE status = 'COMPLETED'");
@@ -1467,14 +1761,33 @@ class Smart_Dube_API {
     }
 
     public static function handle_webhook_test($request) {
+        global $wpdb;
+        $params = $request->get_json_params();
+        $gateway = sanitize_text_field($params['gateway'] ?? 'TELEBIRR');
+        $payload = $params['payload'] ?? ['event' => 'PAYMENT_SETTLEMENT_TEST', 'status' => 'SUCCESS'];
+
+        $table_gateway_logs = $wpdb->prefix . 'dube_payment_gateway_logs';
+        $wpdb->insert($table_gateway_logs, [
+            'gateway_name' => $gateway,
+            'event_type' => 'PAYMENT_SETTLEMENT_TEST',
+            'payload_json' => is_string($payload) ? $payload : json_encode($payload),
+            'response_status' => 'SUCCESS',
+            'created_at' => current_time('mysql')
+        ]);
+
         return new WP_REST_Response([
-            'message' => 'Simulated gateway webhook processed successfully',
+            'message' => "Simulated {$gateway} Webhook event dispatched!",
             'status' => 'SUCCESS'
         ], 200);
     }
 
     public static function get_admin_gateways($request) {
+        global $wpdb;
+        $table_gateway_logs = $wpdb->prefix . 'dube_payment_gateway_logs';
+        $logs = $wpdb->get_results("SELECT * FROM $table_gateway_logs ORDER BY created_at DESC LIMIT 50", ARRAY_A);
+
         return new WP_REST_Response([
+            'logs' => $logs ?: [],
             'gateways' => [
                 ['name' => 'TELEBIRR', 'status' => 'ONLINE', 'successRate' => '99.4%'],
                 ['name' => 'CBE_BIRR', 'status' => 'ONLINE', 'successRate' => '98.8%'],
