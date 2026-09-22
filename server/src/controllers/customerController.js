@@ -143,6 +143,26 @@ async function initiateRepayment(req, res) {
         installmentNo
       });
 
+      // Update schedule installment status if installmentNo was provided
+      if (installmentNo) {
+        const scheduleRow = await db.get(`SELECT * FROM customer_schedules WHERE user_id = $1 AND status = 'ACTIVE' ORDER BY id DESC LIMIT 1`, [req.user.id]);
+        if (scheduleRow) {
+          let installments = JSON.parse(scheduleRow.installments_json || '[]');
+          installments = installments.map(inst => {
+            if (inst.installmentNo === parseInt(installmentNo)) {
+              return { 
+                ...inst, 
+                status: (paymentGateway === 'RECEIPT_UPLOAD') ? 'PENDING_APPROVAL' : 'PAID',
+                paidGateway: paymentGateway,
+                referenceCode: referenceCode
+              };
+            }
+            return inst;
+          });
+          await db.run(`UPDATE customer_schedules SET installments_json = $1 WHERE id = $2`, [JSON.stringify(installments), scheduleRow.id]);
+        }
+      }
+
       return res.json({
         message: `Multi-merchant repayment of ${payAmount.toFixed(2)} ETB via ${paymentGateway} successfully processed across ${multiResult.allocations.length} merchants.`,
         receipt: multiResult
@@ -167,7 +187,12 @@ async function initiateRepayment(req, res) {
         let installments = JSON.parse(scheduleRow.installments_json || '[]');
         installments = installments.map(inst => {
           if (inst.installmentNo === parseInt(installmentNo)) {
-            return { ...inst, status: 'PAID' };
+            return { 
+              ...inst, 
+              status: (paymentGateway === 'RECEIPT_UPLOAD') ? 'PENDING_APPROVAL' : 'PAID',
+              paidGateway: paymentGateway,
+              referenceCode: referenceCode
+            };
           }
           return inst;
         });
