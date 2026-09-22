@@ -430,16 +430,36 @@ export const CustomerPortal = () => {
   const repayments = data?.repayments || [];
   const profiles = data?.profiles || [];
   const allActiveSchedules = data?.activeSchedules || (data?.activeSchedule ? [data.activeSchedule] : []);
+
+  // DEBUG: log schedules and transactions for diagnosis
+  // eslint-disable-next-line no-console
+  if (allActiveSchedules.length > 0) {
+    // eslint-disable-next-line no-console
+    console.log('[SmartDube] Active Schedules:', JSON.stringify(allActiveSchedules.map(s => ({ id: s.id, tx_id: s.transaction_id, merch_id: s.merchant_id, insts: s.installments?.map(i => i.status) }))));
+  }
+
+  const scheduledMerchantIds = new Set(
+    allActiveSchedules
+      .filter(s => s.installments?.some(i => i.status !== 'PAID'))
+      .map(s => String(s.merchant_id || ''))
+      .filter(Boolean)
+  );
+  const scheduledTxIds = new Set(
+    allActiveSchedules
+      .filter(s => s.installments?.some(i => i.status !== 'PAID') && s.transaction_id)
+      .map(s => String(s.transaction_id))
+  );
+  const scheduledTxRefs = new Set(
+    allActiveSchedules
+      .filter(s => s.installments?.some(i => i.status !== 'PAID') && s.transaction_ref)
+      .map(s => String(s.transaction_ref))
+  );
+
   const unscheduledPendingTransactions = pendingTransactions.filter(tx => {
-    const isScheduled = allActiveSchedules.some(s => {
-      const hasUnpaid = s.installments?.some(i => i.status !== 'PAID');
-      if (!hasUnpaid) return false;
-      const sameMerchant = (s.merchant_id && String(s.merchant_id) === String(tx.merchant_id)) || (!s.merchant_id && s.customer_id && String(s.customer_id) === String(tx.customer_id));
-      const sameTxId = s.transaction_id && String(s.transaction_id) === String(tx.id);
-      const sameTxRef = s.transaction_ref && String(s.transaction_ref) === String(tx.transaction_ref);
-      return sameMerchant || sameTxId || sameTxRef || (!s.transaction_id && !s.merchant_id);
-    });
-    return !isScheduled;
+    if (scheduledTxIds.has(String(tx.id))) return false;
+    if (scheduledTxRefs.has(String(tx.transaction_ref))) return false;
+    if (scheduledMerchantIds.has(String(tx.merchant_id))) return false;
+    return true;
   });
 
   const chartWidth = 500;
