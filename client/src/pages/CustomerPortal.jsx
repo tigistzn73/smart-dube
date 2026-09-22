@@ -430,6 +430,15 @@ export const CustomerPortal = () => {
   const repayments = data?.repayments || [];
   const profiles = data?.profiles || [];
   const allActiveSchedules = data?.activeSchedules || (data?.activeSchedule ? [data.activeSchedule] : []);
+  const unscheduledPendingTransactions = pendingTransactions.filter(tx => {
+    const isScheduled = allActiveSchedules.some(s => 
+      s.installments?.some(i => i.status !== 'PAID') &&
+      (String(s.transaction_id) === String(tx.id) ||
+       (s.transaction_ref && String(s.transaction_ref) === String(tx.transaction_ref)) ||
+       (!s.transaction_id && String(s.merchant_id) === String(tx.merchant_id)))
+    );
+    return !isScheduled;
+  });
 
   const chartWidth = 500;
   const chartHeight = 150;
@@ -513,7 +522,7 @@ export const CustomerPortal = () => {
                   {[
                     { id: 'DASHBOARD', name: t('Dashboard Home', 'ዳሽቦርድ መነሻ'), icon: Wallet },
                     { id: 'MERCHANTS', name: t('Linked Merchants', 'የተገናኙ ነጋዴዎች'), icon: Store, count: profiles.length },
-                    { id: 'TRANSACTIONS', name: t('Pending Dube Receipts', 'ያልተከፈሉ ደረሰኞች'), icon: Receipt, count: pendingTransactions.length },
+                    { id: 'TRANSACTIONS', name: t('Pending Dube Receipts', 'ያልተከፈሉ ደረሰኞች'), icon: Receipt, count: unscheduledPendingTransactions.length },
                     { id: 'REPAYMENTS', name: t('Settlement History', 'የክፍያ ታሪክ'), icon: CheckCircle2 }
                   ].map(item => {
                     const isActive = activeTab === item.id;
@@ -575,7 +584,7 @@ export const CustomerPortal = () => {
               {[
                 { id: 'DASHBOARD', name: t('Dashboard Home', 'ዳሽቦርድ መነሻ'), icon: Wallet },
                 { id: 'MERCHANTS', name: t('Linked Merchants', 'የተገናኙ ነጋዴዎች'), icon: Store, count: profiles.length },
-                { id: 'TRANSACTIONS', name: t('Pending Dube Receipts', 'ያልተከፈሉ ደረሰኞች'), icon: Receipt, count: pendingTransactions.length },
+                { id: 'TRANSACTIONS', name: t('Pending Dube Receipts', 'ያልተከፈሉ ደረሰኞች'), icon: Receipt, count: unscheduledPendingTransactions.length },
                 { id: 'REPAYMENTS', name: t('Settlement History', 'የክፍያ ታሪክ'), icon: CheckCircle2 }
               ].map(item => {
                 const isActive = activeTab === item.id;
@@ -1023,11 +1032,11 @@ export const CustomerPortal = () => {
                   <p className="text-xs text-slate-400">{t('Pay back instantly via Telebirr, Chapa, or CBE Birr', 'በቴሌብር፣ ቻፓ ወይም ሲቢኢ ብር በፍጥነት ይክፈሉ')}</p>
                 </div>
 
-                {pendingTransactions.length === 0 ? (
+                {unscheduledPendingTransactions.length === 0 ? (
                   <div className="text-center py-8 text-slate-500 text-xs">{t('No pending credit ledger items found.', 'ምንም ያልተከፈለ የዱቤ ቀሪ ሂሳብ አልተገኘም።')}</div>
                 ) : (
                   <div className="space-y-3">
-                    {pendingTransactions.map(tx => {
+                    {unscheduledPendingTransactions.map(tx => {
                       const rawItems = tx.items || (typeof tx.items_json === 'string' ? (() => { try { return JSON.parse(tx.items_json); } catch { return []; } })() : []);
                       return (
                         <div
