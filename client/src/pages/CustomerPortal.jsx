@@ -338,7 +338,7 @@ export const CustomerPortal = () => {
     if (!targetBalance) return;
     const merchantIdForSchedule = chosenTx
       ? Number(chosenTx.merchant_id)
-      : (selectedScheduleMerchant !== 'ALL' ? Number(selectedScheduleMerchant) : null);
+      : (selectedScheduleMerchant !== 'ALL' ? Number(selectedScheduleMerchant) : (profiles[0] ? Number(profiles[0].merchant_id) : null));
 
     try {
       setApplyingSchedule(true);
@@ -897,8 +897,9 @@ export const CustomerPortal = () => {
                     const profileForStore = profiles.find(p => String(p.merchant_id) === activeMerchantId) || profiles[0];
                     const currentViewSchedule = allActiveSchedules.find(s =>
                       (profileForStore && String(s.merchant_id) === String(profileForStore.merchant_id)) ||
-                      (profileForStore && s.customer_id === profileForStore.id)
-                    );
+                      (profileForStore && s.customer_id === profileForStore.id) ||
+                      !s.merchant_id
+                    ) || allActiveSchedules.find(s => s.installments?.some(i => i.status !== 'PAID')) || allActiveSchedules[0];
 
                     const hasUnpaidInsts = currentViewSchedule && currentViewSchedule.installments?.some(i => i.status !== 'PAID');
 

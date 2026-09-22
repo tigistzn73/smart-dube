@@ -1036,7 +1036,7 @@ class Smart_Dube_API {
              LEFT JOIN $table_merchants m ON s.merchant_id = m.id 
              LEFT JOIN $table_tx tx ON s.transaction_id = tx.id 
              WHERE s.customer_id IN ($id_placeholders) 
-             ORDER BY s.due_date ASC",
+             ORDER BY s.id DESC",
             ARRAY_A
         ) : [];
 
@@ -1065,7 +1065,19 @@ class Smart_Dube_API {
                     'status' => $row['status']
                 ];
             }
-            $active_schedules = array_values($grouped);
+
+            foreach ($grouped as $sched) {
+                $has_unpaid = false;
+                foreach ($sched['installments'] as $inst) {
+                    if ($inst['status'] !== 'PAID') {
+                        $has_unpaid = true;
+                        break;
+                    }
+                }
+                if ($has_unpaid) {
+                    $active_schedules[] = $sched;
+                }
+            }
         }
 
         return new WP_REST_Response([
@@ -1664,16 +1676,19 @@ class Smart_Dube_API {
         if (!$merchant_id && $transaction_id) {
             $merchant_id = intval($wpdb->get_var($wpdb->prepare("SELECT merchant_id FROM $table_tx WHERE id = %d", $transaction_id)));
         }
+        if (!$merchant_id && $customer_id) {
+            $merchant_id = intval($wpdb->get_var($wpdb->prepare("SELECT merchant_id FROM $table_cp WHERE id = %d", $customer_id)));
+        }
 
-        // Delete previous pending installments for this transaction or merchant to avoid duplicate schedule entries
+        // Delete previous installments for this transaction or customer/merchant to avoid duplicate/conflicting schedules
         if ($transaction_id) {
             $wpdb->query($wpdb->prepare(
-                "DELETE FROM $table_schedules WHERE transaction_id = %d AND status = 'PENDING'", 
+                "DELETE FROM $table_schedules WHERE transaction_id = %d", 
                 $transaction_id
             ));
-        } elseif ($customer_id && $merchant_id) {
+        } elseif ($customer_id) {
             $wpdb->query($wpdb->prepare(
-                "DELETE FROM $table_schedules WHERE customer_id = %d AND merchant_id = %d AND (transaction_id IS NULL OR transaction_id = 0) AND status = 'PENDING'", 
+                "DELETE FROM $table_schedules WHERE customer_id = %d AND (merchant_id = %d OR merchant_id IS NULL OR merchant_id = 0) AND (transaction_id IS NULL OR transaction_id = 0)", 
                 $customer_id, 
                 $merchant_id
             ));
