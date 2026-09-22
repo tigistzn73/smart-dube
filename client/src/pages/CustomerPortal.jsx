@@ -898,13 +898,14 @@ export const CustomerPortal = () => {
                     const currentViewSchedule = allActiveSchedules.find(s =>
                       (profileForStore && String(s.merchant_id) === String(profileForStore.merchant_id)) ||
                       (profileForStore && s.customer_id === profileForStore.id)
-                    ) || allActiveSchedules[0];
+                    );
 
-                    if (currentViewSchedule) {
+                    const hasUnpaidInsts = currentViewSchedule && currentViewSchedule.installments?.some(i => i.status !== 'PAID');
+
+                    if (currentViewSchedule && hasUnpaidInsts) {
                       const paidCount = (currentViewSchedule.installments || []).filter(i => 
                         i.status === 'PAID' || i.status === 'PENDING_APPROVAL' || i.status === 'PENDING_REVIEW'
                       ).length;
-                      const allPaid = (currentViewSchedule.installments || []).every(i => i.status === 'PAID');
 
                       return (
                         <div className="mt-3 space-y-2 bg-slate-900/90 p-3.5 rounded-xl border border-slate-800">
@@ -916,13 +917,6 @@ export const CustomerPortal = () => {
                               {paidCount} / {currentViewSchedule.installments.length} {t('Paid', 'ተከፍሏል')}
                             </span>
                           </div>
-
-                          {allPaid && (
-                            <div className="text-center py-2 px-3 rounded-lg bg-amber-500/10 border border-amber-500/30 text-yellow-300 text-xs font-bold flex items-center justify-center gap-1.5 shadow-sm">
-                              <CheckCircle2 className="w-4 h-4 text-yellow-400" />
-                              <span>{t('All Installments Paid in Full!', 'ሁሉም ክፍያዎች በተሟላ ሁኔታ ተከፍለዋል!')}</span>
-                            </div>
-                          )}
 
                           {currentViewSchedule.installments.map(inst => {
                             const isPaid = inst.status === 'PAID';
