@@ -429,6 +429,7 @@ export const CustomerPortal = () => {
   const pendingTransactions = transactions.filter(tx => tx.status !== 'SETTLED');
   const repayments = data?.repayments || [];
   const profiles = data?.profiles || [];
+  const allActiveSchedules = data?.activeSchedules || (data?.activeSchedule ? [data.activeSchedule] : []);
 
   const chartWidth = 500;
   const chartHeight = 150;
@@ -1128,16 +1129,25 @@ export const CustomerPortal = () => {
                                 );
                               }
 
+                              const isTxScheduled = allActiveSchedules.some(s => 
+                                s.installments?.some(i => i.status !== 'PAID') &&
+                                (String(s.transaction_id) === String(tx.id) ||
+                                 (s.transaction_ref && String(s.transaction_ref) === String(tx.transaction_ref)) ||
+                                 (!s.transaction_id && String(s.merchant_id) === String(tx.merchant_id)))
+                              );
+
                               return (
                                 <div className="flex items-center gap-2">
-                                  <button
-                                    onClick={() => openScheduleModal(tx.merchant_id, tx.id)}
-                                    className="px-3 py-2 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-sky-400 hover:text-sky-300 text-xs font-bold border border-slate-700/80 flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
-                                    title={t('Create installment schedule for this Dube purchase', 'ለዚህ የዱቤ ግዢ የክፍያ የጊዜ ሰሌዳ አውጣ')}
-                                  >
-                                    <Clock className="w-3.5 h-3.5 text-sky-400" />
-                                    <span>{t('Schedule', 'የጊዜ ሰሌዳ')}</span>
-                                  </button>
+                                  {!isTxScheduled && (
+                                    <button
+                                      onClick={() => openScheduleModal(tx.merchant_id, tx.id)}
+                                      className="px-3 py-2 rounded-xl bg-slate-800/90 hover:bg-slate-700 text-sky-400 hover:text-sky-300 text-xs font-bold border border-slate-700/80 flex items-center gap-1.5 transition-all cursor-pointer shadow-sm"
+                                      title={t('Create installment schedule for this Dube purchase', 'ለዚህ የዱቤ ግዢ የክፍያ የጊዜ ሰሌዳ አውጣ')}
+                                    >
+                                      <Clock className="w-3.5 h-3.5 text-sky-400" />
+                                      <span>{t('Schedule', 'የጊዜ ሰሌዳ')}</span>
+                                    </button>
+                                  )}
 
                                   <button
                                     onClick={() => setSelectedTxForPayment(tx)}
