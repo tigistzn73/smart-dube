@@ -431,12 +431,14 @@ export const CustomerPortal = () => {
   const profiles = data?.profiles || [];
   const allActiveSchedules = data?.activeSchedules || (data?.activeSchedule ? [data.activeSchedule] : []);
   const unscheduledPendingTransactions = pendingTransactions.filter(tx => {
-    const isScheduled = allActiveSchedules.some(s => 
-      s.installments?.some(i => i.status !== 'PAID') &&
-      (String(s.transaction_id) === String(tx.id) ||
-       (s.transaction_ref && String(s.transaction_ref) === String(tx.transaction_ref)) ||
-       (!s.transaction_id && String(s.merchant_id) === String(tx.merchant_id)))
-    );
+    const isScheduled = allActiveSchedules.some(s => {
+      const hasUnpaid = s.installments?.some(i => i.status !== 'PAID');
+      if (!hasUnpaid) return false;
+      const sameMerchant = String(s.merchant_id) === String(tx.merchant_id);
+      const sameTxId = s.transaction_id && String(s.transaction_id) === String(tx.id);
+      const sameTxRef = s.transaction_ref && String(s.transaction_ref) === String(tx.transaction_ref);
+      return sameMerchant || sameTxId || sameTxRef;
+    });
     return !isScheduled;
   });
 
