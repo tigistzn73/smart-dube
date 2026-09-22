@@ -434,10 +434,10 @@ export const CustomerPortal = () => {
     const isScheduled = allActiveSchedules.some(s => {
       const hasUnpaid = s.installments?.some(i => i.status !== 'PAID');
       if (!hasUnpaid) return false;
-      const sameMerchant = String(s.merchant_id) === String(tx.merchant_id);
+      const sameMerchant = (s.merchant_id && String(s.merchant_id) === String(tx.merchant_id)) || (!s.merchant_id && s.customer_id && String(s.customer_id) === String(tx.customer_id));
       const sameTxId = s.transaction_id && String(s.transaction_id) === String(tx.id);
       const sameTxRef = s.transaction_ref && String(s.transaction_ref) === String(tx.transaction_ref);
-      return sameMerchant || sameTxId || sameTxRef;
+      return sameMerchant || sameTxId || sameTxRef || (!s.transaction_id && !s.merchant_id);
     });
     return !isScheduled;
   });

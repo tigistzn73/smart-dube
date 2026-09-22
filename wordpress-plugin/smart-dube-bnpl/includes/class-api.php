@@ -1029,9 +1029,13 @@ class Smart_Dube_API {
             ARRAY_A
         );
 
+        // Auto-heal schedule merchant_id references if null or 0
+        $wpdb->query("UPDATE $table_schedules s JOIN $table_tx tx ON s.transaction_id = tx.id SET s.merchant_id = tx.merchant_id WHERE s.merchant_id IS NULL OR s.merchant_id = 0");
+        $wpdb->query("UPDATE $table_schedules s JOIN $table_cp cp ON s.customer_id = cp.id SET s.merchant_id = cp.merchant_id WHERE s.merchant_id IS NULL OR s.merchant_id = 0");
+
         // Fetch active installment schedules for this customer
         $schedules_rows = !empty($profile_ids) ? $wpdb->get_results(
-            "SELECT s.*, m.store_name, tx.transaction_ref, tx.items_json 
+            "SELECT s.*, COALESCE(m.store_name, 'Merchant Store') as store_name, tx.transaction_ref, tx.items_json 
              FROM $table_schedules s 
              LEFT JOIN $table_merchants m ON s.merchant_id = m.id 
              LEFT JOIN $table_tx tx ON s.transaction_id = tx.id 
