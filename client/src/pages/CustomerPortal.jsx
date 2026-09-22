@@ -931,7 +931,7 @@ export const CustomerPortal = () => {
                             return (
                               <div key={inst.installmentNo} className="flex justify-between items-center text-xs py-2 border-b border-slate-800/60 font-mono">
                                 <div>
-                                  <span className="text-slate-200">{t('Inst', 'ክፍል')} #{inst.installmentNo} ({t('Due', 'ቀን')}: {inst.dueDate})</span>
+                                  <span className="text-slate-200">{t('Inst', 'ክፍል')} #{inst.installmentNo}</span>
                                 </div>
                                 <div className="flex items-center gap-2">
                                   <span className="text-amber-400 font-bold">{fmt(inst.amount)} ETB</span>
