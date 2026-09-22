@@ -45,10 +45,15 @@ Smart_Dube_Admin::init();
 
 // Main App Render Callback
 function smart_dube_render_app_shortcode($atts = []) {
+    $js_files = glob(SMART_DUBE_PLUGIN_DIR . 'assets/*.js');
+    $css_files = glob(SMART_DUBE_PLUGIN_DIR . 'assets/*.css');
+    $js_file = !empty($js_files) ? basename(end($js_files)) : 'index.js';
+    $css_file = !empty($css_files) ? basename(end($css_files)) : 'index.css';
+
     // 1. Enqueue React CSS
     wp_enqueue_style(
         'smart-dube-css',
-        SMART_DUBE_PLUGIN_URL . 'assets/index.css',
+        SMART_DUBE_PLUGIN_URL . 'assets/' . $css_file,
         [],
         SMART_DUBE_VERSION
     );
@@ -56,7 +61,7 @@ function smart_dube_render_app_shortcode($atts = []) {
     // 2. Enqueue React Bundle JS
     wp_enqueue_script(
         'smart-dube-js',
-        SMART_DUBE_PLUGIN_URL . 'assets/index.js',
+        SMART_DUBE_PLUGIN_URL . 'assets/' . $js_file,
         [],
         SMART_DUBE_VERSION,
         true
