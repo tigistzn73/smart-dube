@@ -1,6 +1,6 @@
 <?php
 /**
- * Smart Dube SMS Gateway Helper (Africa's Talking Integration)
+ * Smart Dube SMS Gateway (Africa's Talking Integration)
  *
  * @package SmartDube
  */
@@ -9,46 +9,59 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-if (!class_exists('Smart_Dube_SMS')) {
 class Smart_Dube_SMS {
 
-    public static function send($phone, $message, $type = 'NOTIFICATION', $customer_id = null) {
+    public static function send_sms($phone, $message, $customer_id = null, $type = 'REMINDER') {
         global $wpdb;
 
-        $username = get_option('smart_dube_at_username', 'sandbox');
-        $api_key  = get_option('smart_dube_at_apikey', '');
-        $sender   = get_option('smart_dube_at_sender', 'SmartDube');
+        $username = get_option('smart_dube_at_username', 'Dbusms');
+        $api_key = get_option('smart_dube_at_apikey', 'atsk_1af4ca589d97fae69fa09fa845f2ad3e77864f19e7a836d396996d9326e5e0ba235e1657');
+        $sender_id = get_option('smart_dube_at_sender', '');
 
-        $status = 'SIMULATED';
-
-        if (!empty($api_key) && !empty($username) && $username !== 'sandbox') {
-            $url = 'https://api.africastalking.com/version1/messaging';
-            $response = wp_remote_post($url, [
-                'headers' => [
-                    'Accept'  => 'application/json',
-                    'apiKey'  => $api_key
-                ],
-                'body' => [
-                    'username' => $username,
-                    'to'       => $phone,
-                    'message'  => $message,
-                    'from'     => $sender
-                ],
-                'timeout' => 15
-            ]);
-
-            if (!is_wp_error($response) && wp_remote_retrieve_response_code($response) === 201) {
-                $status = 'DELIVERED';
-            } else {
-                $status = 'FAILED';
-            }
+        // Format phone number (+251...)
+        $formatted_phone = preg_replace('/[^0-9+]/', '', $phone);
+        if (strpos($formatted_phone, '0') === 0) {
+            $formatted_phone = '+251' . substr($formatted_phone, 1);
+        } elseif (strpos($formatted_phone, '251') === 0) {
+            $formatted_phone = '+' . $formatted_phone;
         }
 
-        // Save log to DB
-        $t_sms = $wpdb->prefix . 'smart_dube_sms_notifications';
-        $wpdb->insert($t_sms, [
+        $url = 'https://api.africastalking.com/version1/messaging';
+        if (strpos($username, 'sandbox') !== false || empty($username)) {
+            $url = 'https://api.sandbox.africastalking.com/version1/messaging';
+        }
+
+        $body = [
+            'username' => $username,
+            'to'       => $formatted_phone,
+            'message'  => $message
+        ];
+
+        if (!empty($sender_id)) {
+            $body['from'] = $sender_id;
+        }
+
+        $response = wp_remote_post($url, [
+            'method'  => 'POST',
+            'headers' => [
+                'apiKey'       => $api_key,
+                'Content-Type' => 'application/x-www-form-urlencoded',
+                'Accept'       => 'application/json'
+            ],
+            'body'    => http_build_query($body),
+            'timeout' => 15
+        ]);
+
+        $status = 'DELIVERED';
+        if (is_wp_error($response)) {
+            $status = 'FAILED';
+        }
+
+        // Log into database
+        $table_sms = $wpdb->prefix . 'dube_sms_notifications';
+        $wpdb->insert($table_sms, [
             'customer_id' => $customer_id,
-            'phone'       => $phone,
+            'phone'       => $formatted_phone,
             'message'     => $message,
             'type'        => $type,
             'status'      => $status,
@@ -56,10 +69,8 @@ class Smart_Dube_SMS {
         ]);
 
         return [
-            'success' => ($status !== 'FAILED'),
-            'status'  => $status,
-            'message' => 'SMS queued/sent successfully.'
+            'status' => $status,
+            'phone'  => $formatted_phone
         ];
     }
-}
 }

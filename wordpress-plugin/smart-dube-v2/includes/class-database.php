@@ -1,6 +1,6 @@
 <?php
 /**
- * Smart Dube WordPress Database Class
+ * Smart Dube Database Schema & Initializer
  *
  * @package SmartDube
  */
@@ -9,251 +9,304 @@ if (!defined('ABSPATH')) {
     exit;
 }
 
-if (!class_exists('Smart_Dube_Database')) {
 class Smart_Dube_Database {
 
-    public static function get_table_name($table) {
-        global $wpdb;
-        return $wpdb->prefix . 'smart_dube_' . $table;
-    }
-
     public static function maybe_init_tables() {
-        if (get_option('smart_dube_db_version') !== '1.0.3') {
+        global $wpdb;
+        $table_users = $wpdb->prefix . 'dube_users';
+        $exists = $wpdb->get_var("SHOW TABLES LIKE '$table_users'");
+        if ($exists !== $table_users) {
             self::init_tables();
+        } else {
+            // Ensure password_hash column is wide enough in existing installations
+            @$wpdb->query("ALTER TABLE $table_users MODIFY password_hash VARCHAR(255) NOT NULL");
+            $table_repayments = $wpdb->prefix . 'dube_repayments';
+            @$wpdb->query("ALTER TABLE $table_repayments MODIFY receipt_url LONGTEXT DEFAULT NULL");
         }
     }
 
     public static function init_tables() {
         global $wpdb;
-        require_once(ABSPATH . 'wp-admin/includes/upgrade.php');
-
         $charset_collate = $wpdb->get_charset_collate();
 
-        $t_users        = self::get_table_name('users');
-        $t_merchants    = self::get_table_name('merchants');
-        $t_customers    = self::get_table_name('customer_profiles');
-        $t_transactions = self::get_table_name('credit_transactions');
-        $t_repayments   = self::get_table_name('repayments');
-        $t_sms          = self::get_table_name('sms_notifications');
-
         // 1. Users table
-        $sql_users = "CREATE TABLE $t_users (
-            id BIGINT(20) NOT NULL AUTO_INCREMENT,
-            full_name VARCHAR(200) NOT NULL,
-            phone VARCHAR(30) NOT NULL UNIQUE,
-            email VARCHAR(200) DEFAULT '',
-            role VARCHAR(30) NOT NULL DEFAULT 'CUSTOMER',
-            password_hash VARCHAR(255) NOT NULL,
-            fayda_id VARCHAR(50) DEFAULT '',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY  (id),
-            KEY phone_idx (phone)
-        ) $charset_collate;";
+        $table_users = $wpdb->prefix . 'dube_users';
+        $wpdb->query("CREATE TABLE IF NOT EXISTS $table_users (
+            id bigint(20) NOT NULL AUTO_INCREMENT,
+            full_name varchar(200) NOT NULL,
+            phone varchar(20) NOT NULL,
+            email varchar(200) DEFAULT NULL,
+            role varchar(20) NOT NULL,
+            password_hash varchar(255) NOT NULL,
+            fayda_id varchar(50) DEFAULT NULL,
+            photo_url text DEFAULT NULL,
+            reset_token varchar(10) DEFAULT NULL,
+            reset_token_expires datetime DEFAULT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            PRIMARY KEY (id),
+            UNIQUE KEY phone (phone)
+        ) $charset_collate;");
+        @$wpdb->query("ALTER TABLE $table_users MODIFY password_hash VARCHAR(255) NOT NULL");
 
         // 2. Merchants table
-        $sql_merchants = "CREATE TABLE $t_merchants (
-            id BIGINT(20) NOT NULL AUTO_INCREMENT,
-            user_id BIGINT(20) NOT NULL,
-            store_name VARCHAR(200) NOT NULL,
-            business_license_no VARCHAR(100) NOT NULL,
-            address TEXT NOT NULL,
-            kyc_status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        $table_merchants = $wpdb->prefix . 'dube_merchants';
+        $wpdb->query("CREATE TABLE IF NOT EXISTS $table_merchants (
+            id bigint(20) NOT NULL AUTO_INCREMENT,
+            user_id bigint(20) NOT NULL,
+            store_name varchar(200) NOT NULL,
+            business_license_no varchar(100) NOT NULL,
+            address text NOT NULL,
+            kyc_status varchar(20) DEFAULT 'PENDING' NOT NULL,
+            verified_at datetime DEFAULT NULL,
+            kyc_notes text DEFAULT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            PRIMARY KEY (id),
+            KEY user_id (user_id)
+        ) $charset_collate;");
+
+        // 3. Customer Profiles table
+        $table_customer_profiles = $wpdb->prefix . 'dube_customer_profiles';
+        $wpdb->query("CREATE TABLE IF NOT EXISTS $table_customer_profiles (
+            id bigint(20) NOT NULL AUTO_INCREMENT,
+            merchant_id bigint(20) NOT NULL,
+            user_id bigint(20) DEFAULT NULL,
+            full_name varchar(200) NOT NULL,
+            phone varchar(20) NOT NULL,
+            fayda_id varchar(50) NOT NULL,
+            photo_url text DEFAULT NULL,
+            credit_limit decimal(12,2) DEFAULT '5000.00' NOT NULL,
+            current_balance decimal(12,2) DEFAULT '0.00' NOT NULL,
+            status varchar(20) DEFAULT 'ACTIVE' NOT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            PRIMARY KEY (id),
+            KEY merchant_id (merchant_id),
+            KEY user_id (user_id),
+            KEY phone (phone)
+        ) $charset_collate;");
+
+        // 4. Credit Transactions table
+        $table_credit_transactions = $wpdb->prefix . 'dube_credit_transactions';
+        $sql_credit_transactions = "CREATE TABLE $table_credit_transactions (
+            id bigint(20) NOT NULL AUTO_INCREMENT,
+            transaction_ref varchar(100) NOT NULL,
+            customer_id bigint(20) NOT NULL,
+            merchant_id bigint(20) NOT NULL,
+            items_json longtext NOT NULL,
+            total_amount decimal(12,2) NOT NULL,
+            due_date date NOT NULL,
+            status varchar(20) DEFAULT 'PENDING' NOT NULL,
+            notes text DEFAULT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
             PRIMARY KEY  (id),
-            KEY user_id_idx (user_id)
+            UNIQUE KEY transaction_ref (transaction_ref),
+            KEY customer_id (customer_id),
+            KEY merchant_id (merchant_id)
         ) $charset_collate;";
+        dbDelta($sql_credit_transactions);
 
-        // 3. Customer profiles
-        $sql_customers = "CREATE TABLE $t_customers (
-            id BIGINT(20) NOT NULL AUTO_INCREMENT,
-            merchant_id BIGINT(20) NOT NULL,
-            user_id BIGINT(20) DEFAULT NULL,
-            full_name VARCHAR(200) NOT NULL,
-            phone VARCHAR(30) NOT NULL,
-            fayda_id VARCHAR(50) NOT NULL,
-            photo_url TEXT DEFAULT NULL,
-            credit_limit DECIMAL(12,2) NOT NULL DEFAULT 5000.00,
-            current_balance DECIMAL(12,2) NOT NULL DEFAULT 0.00,
-            status VARCHAR(30) NOT NULL DEFAULT 'ACTIVE',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        // 5. Repayments table
+        $table_repayments = $wpdb->prefix . 'dube_repayments';
+        $sql_repayments = "CREATE TABLE $table_repayments (
+            id bigint(20) NOT NULL AUTO_INCREMENT,
+            repayment_ref varchar(100) NOT NULL,
+            transaction_id bigint(20) DEFAULT NULL,
+            customer_id bigint(20) NOT NULL,
+            merchant_id bigint(20) NOT NULL,
+            amount decimal(12,2) NOT NULL,
+            payment_gateway varchar(30) NOT NULL,
+            reference_code varchar(100) NOT NULL,
+            receipt_url longtext DEFAULT NULL,
+            status varchar(20) DEFAULT 'PENDING' NOT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
             PRIMARY KEY  (id),
-            KEY merchant_phone_idx (merchant_id, phone)
+            UNIQUE KEY repayment_ref (repayment_ref),
+            KEY customer_id (customer_id),
+            KEY merchant_id (merchant_id)
         ) $charset_collate;";
-
-        // 4. Credit transactions
-        $sql_transactions = "CREATE TABLE $t_transactions (
-            id BIGINT(20) NOT NULL AUTO_INCREMENT,
-            transaction_ref VARCHAR(100) NOT NULL UNIQUE,
-            customer_id BIGINT(20) NOT NULL,
-            merchant_id BIGINT(20) NOT NULL,
-            items_json TEXT NOT NULL,
-            total_amount DECIMAL(12,2) NOT NULL,
-            due_date DATE NOT NULL,
-            status VARCHAR(30) NOT NULL DEFAULT 'PENDING',
-            notes TEXT DEFAULT NULL,
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY  (id),
-            KEY customer_idx (customer_id),
-            KEY merchant_idx (merchant_id)
-        ) $charset_collate;";
-
-        // 5. Repayments
-        $sql_repayments = "CREATE TABLE $t_repayments (
-            id BIGINT(20) NOT NULL AUTO_INCREMENT,
-            repayment_ref VARCHAR(100) NOT NULL UNIQUE,
-            transaction_id BIGINT(20) DEFAULT NULL,
-            customer_id BIGINT(20) NOT NULL,
-            merchant_id BIGINT(20) NOT NULL,
-            amount DECIMAL(12,2) NOT NULL,
-            payment_gateway VARCHAR(50) NOT NULL DEFAULT 'CASH',
-            reference_code VARCHAR(100) NOT NULL,
-            receipt_url TEXT DEFAULT NULL,
-            status VARCHAR(30) NOT NULL DEFAULT 'COMPLETED',
-            created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY  (id),
-            KEY customer_repay_idx (customer_id)
-        ) $charset_collate;";
-
-        // 6. SMS notifications
-        $sql_sms = "CREATE TABLE $t_sms (
-            id BIGINT(20) NOT NULL AUTO_INCREMENT,
-            customer_id BIGINT(20) DEFAULT NULL,
-            phone VARCHAR(30) NOT NULL,
-            message TEXT NOT NULL,
-            type VARCHAR(50) NOT NULL,
-            status VARCHAR(30) NOT NULL DEFAULT 'SIMULATED',
-            sent_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-            PRIMARY KEY  (id)
-        ) $charset_collate;";
-
-        dbDelta($sql_users);
-        dbDelta($sql_merchants);
-        dbDelta($sql_customers);
-        dbDelta($sql_transactions);
         dbDelta($sql_repayments);
+        @$wpdb->query("ALTER TABLE $table_repayments MODIFY receipt_url LONGTEXT DEFAULT NULL");
+
+        // 6. SMS Notifications table
+        $table_sms = $wpdb->prefix . 'dube_sms_notifications';
+        $sql_sms = "CREATE TABLE $table_sms (
+            id bigint(20) NOT NULL AUTO_INCREMENT,
+            customer_id bigint(20) DEFAULT NULL,
+            phone varchar(20) NOT NULL,
+            message text NOT NULL,
+            type varchar(30) NOT NULL,
+            status varchar(20) DEFAULT 'SIMULATED' NOT NULL,
+            sent_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            PRIMARY KEY  (id),
+            KEY customer_id (customer_id)
+        ) $charset_collate;";
         dbDelta($sql_sms);
 
-        self::seed_demo_data();
+        // 7. Payment Gateway Logs table
+        $table_gateway_logs = $wpdb->prefix . 'dube_payment_gateway_logs';
+        $sql_gateway_logs = "CREATE TABLE $table_gateway_logs (
+            id bigint(20) NOT NULL AUTO_INCREMENT,
+            gateway_name varchar(30) NOT NULL,
+            event_type varchar(50) NOT NULL,
+            payload_json longtext NOT NULL,
+            response_status varchar(20) NOT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            PRIMARY KEY  (id)
+        ) $charset_collate;";
+        dbDelta($sql_gateway_logs);
 
-        update_option('smart_dube_db_version', '1.0.3');
+        // 8. Audit Logs table
+        $table_audit_logs = $wpdb->prefix . 'dube_audit_logs';
+        $sql_audit_logs = "CREATE TABLE $table_audit_logs (
+            id bigint(20) NOT NULL AUTO_INCREMENT,
+            user_id bigint(20) DEFAULT NULL,
+            actor_name varchar(200) NOT NULL,
+            action varchar(100) NOT NULL,
+            resource varchar(200) NOT NULL,
+            details_json longtext NOT NULL,
+            ip_address varchar(45) NOT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            PRIMARY KEY  (id),
+            KEY user_id (user_id)
+        ) $charset_collate;";
+        dbDelta($sql_audit_logs);
+
+        // 9. Installment Schedules table
+        $table_schedules = $wpdb->prefix . 'dube_installment_schedules';
+        $sql_schedules = "CREATE TABLE $table_schedules (
+            id bigint(20) NOT NULL AUTO_INCREMENT,
+            transaction_id bigint(20) DEFAULT NULL,
+            customer_id bigint(20) NOT NULL,
+            merchant_id bigint(20) NOT NULL,
+            installment_number int(11) NOT NULL,
+            due_date date NOT NULL,
+            amount decimal(12,2) NOT NULL,
+            paid_amount decimal(12,2) DEFAULT '0.00' NOT NULL,
+            status varchar(20) DEFAULT 'PENDING' NOT NULL,
+            created_at datetime DEFAULT CURRENT_TIMESTAMP NOT NULL,
+            PRIMARY KEY  (id),
+            KEY transaction_id (transaction_id),
+            KEY customer_id (customer_id),
+            KEY merchant_id (merchant_id)
+        ) $charset_collate;";
+        dbDelta($sql_schedules);
+
+        // Seed initial demo records if empty
+        self::seed_initial_data();
     }
 
-    public static function seed_demo_data() {
+    public static function seed_initial_data() {
         global $wpdb;
-        $t_users     = self::get_table_name('users');
-        $t_merchants = self::get_table_name('merchants');
-        $t_customers = self::get_table_name('customer_profiles');
-        $t_trans     = self::get_table_name('credit_transactions');
+        $table_users = $wpdb->prefix . 'dube_users';
+        $user_count = $wpdb->get_var("SELECT COUNT(*) FROM $table_users");
 
-        // Check if users already seeded
-        $existing_users = $wpdb->get_var("SELECT COUNT(*) FROM $t_users");
-        if ((int)$existing_users > 0) {
-            return;
+        if (intval($user_count) === 0) {
+            $admin_hash = password_hash('admin123', PASSWORD_BCRYPT);
+            $merchant_hash = password_hash('merchant123', PASSWORD_BCRYPT);
+            $merchant1212_hash = password_hash('merchant1212', PASSWORD_BCRYPT);
+            $customer_hash = password_hash('customer123', PASSWORD_BCRYPT);
+
+            // 1. Admin User
+            $wpdb->insert($table_users, [
+                'full_name' => 'Solomon Kebede (Admin)',
+                'phone' => '+251987005355',
+                'email' => 'admin@smartdube.et',
+                'role' => 'ADMIN',
+                'password_hash' => $admin_hash,
+                'fayda_id' => 'FYD-8890-1122-33',
+                'photo_url' => 'https://api.dicebear.com/7.x/avataaars/svg?seed=Solomon'
+            ]);
+            $admin_id = $wpdb->insert_id;
+
+            // 2. Merchant User 1
+            $wpdb->insert($table_users, [
+                'full_name' => 'Abebe Bikila',
+                'phone' => '+251911223344',
+                'email' => 'abebe@bikalastore.et',
+                'role' => 'MERCHANT',
+                'password_hash' => $merchant_hash,
+                'fayda_id' => 'FYD-4455-6677-88',
+                'photo_url' => 'https://api.dicebear.com/7.x/avataaars/svg?seed=Abebe'
+            ]);
+            $merchant_user1_id = $wpdb->insert_id;
+
+            // 3. Merchant User 2 (Zemero)
+            $wpdb->insert($table_users, [
+                'full_name' => 'Zemero Supermarket',
+                'phone' => '+251932167208',
+                'email' => 'zemero@gmail.com',
+                'role' => 'MERCHANT',
+                'password_hash' => $merchant1212_hash,
+                'fayda_id' => 'FYD-3322-1144-55',
+                'photo_url' => 'https://api.dicebear.com/7.x/avataaars/svg?seed=Zemero'
+            ]);
+            $merchant_user2_id = $wpdb->insert_id;
+
+            // 4. Customer User 1
+            $wpdb->insert($table_users, [
+                'full_name' => 'Dawit Yohannes',
+                'phone' => '+251933445566',
+                'email' => 'dawit@gmail.com',
+                'role' => 'CUSTOMER',
+                'password_hash' => $customer_hash,
+                'fayda_id' => 'FYD-9988-7766-55',
+                'photo_url' => 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150'
+            ]);
+            $customer_user1_id = $wpdb->insert_id;
+
+            // 5. Merchants table
+            $table_merchants = $wpdb->prefix . 'dube_merchants';
+            $wpdb->insert($table_merchants, [
+                'user_id' => $merchant_user1_id,
+                'store_name' => 'Arada Neighborhood Supermarket',
+                'business_license_no' => 'BL-ADDIS-2024-9981',
+                'address' => 'Arada Sub-city, Woreda 03, Addis Ababa',
+                'kyc_status' => 'VERIFIED',
+                'verified_at' => current_time('mysql'),
+                'kyc_notes' => 'Verified on plugin activation'
+            ]);
+            $merchant1_id = $wpdb->insert_id;
+
+            $wpdb->insert($table_merchants, [
+                'user_id' => $merchant_user2_id,
+                'store_name' => 'Zemero Supermarket & Dube',
+                'business_license_no' => 'BL-KIRKOS-2026-1192',
+                'address' => 'Kirkos, Addis Ababa',
+                'kyc_status' => 'VERIFIED',
+                'verified_at' => current_time('mysql'),
+                'kyc_notes' => 'Verified on plugin activation'
+            ]);
+
+            // 6. Customer Profile
+            $table_customer_profiles = $wpdb->prefix . 'dube_customer_profiles';
+            $wpdb->insert($table_customer_profiles, [
+                'merchant_id' => $merchant1_id,
+                'user_id' => $customer_user1_id,
+                'full_name' => 'Dawit Yohannes',
+                'phone' => '+251933445566',
+                'fayda_id' => 'FYD-9988-7766-55',
+                'photo_url' => 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?w=150',
+                'credit_limit' => 8000.00,
+                'current_balance' => 3250.00,
+                'status' => 'ACTIVE'
+            ]);
+            $cp1_id = $wpdb->insert_id;
+
+            // 7. Credit Transaction
+            $table_credit_transactions = $wpdb->prefix . 'dube_credit_transactions';
+            $items_sample = json_encode([
+                ['name' => 'Teff Flour (25kg)', 'quantity' => 1, 'unitPrice' => 2200.00, 'total' => 2200.00],
+                ['name' => 'Sunflower Cooking Oil (5L)', 'quantity' => 1, 'unitPrice' => 1050.00, 'total' => 1050.00]
+            ]);
+            $wpdb->insert($table_credit_transactions, [
+                'transaction_ref' => 'DUBE-1001',
+                'customer_id' => $cp1_id,
+                'merchant_id' => $merchant1_id,
+                'items_json' => $items_sample,
+                'total_amount' => 3250.00,
+                'due_date' => date('Y-m-d', strtotime('+14 days')),
+                'status' => 'PENDING',
+                'notes' => 'Monthly grocery credit Dube'
+            ]);
         }
-
-        // Passwords
-        $pass_m1 = wp_hash_password('merchant123');
-        $pass_m2 = wp_hash_password('merchant1212');
-        $pass_c1 = wp_hash_password('customer123');
-        $pass_ad = wp_hash_password('admin123');
-
-        // Insert Users
-        $wpdb->insert($t_users, [
-            'full_name' => 'Arada Supermarket',
-            'phone'     => '+251911223344',
-            'email'     => 'arada@smartdube.et',
-            'role'      => 'MERCHANT',
-            'password_hash' => $pass_m1,
-            'fayda_id'  => 'FIN-9901-2024-M1'
-        ]);
-        $u_m1_id = $wpdb->insert_id;
-
-        $wpdb->insert($t_users, [
-            'full_name' => 'Zemero Supermarket',
-            'phone'     => '+251932167208',
-            'email'     => 'zemero@smartdube.et',
-            'role'      => 'MERCHANT',
-            'password_hash' => $pass_m2,
-            'fayda_id'  => 'FIN-8812-2024-M2'
-        ]);
-        $u_m2_id = $wpdb->insert_id;
-
-        $wpdb->insert($t_users, [
-            'full_name' => 'Dawit Yohannes',
-            'phone'     => '+251933445566',
-            'email'     => 'dawit@smartdube.et',
-            'role'      => 'CUSTOMER',
-            'password_hash' => $pass_c1,
-            'fayda_id'  => 'FIN-4455-2024-C1'
-        ]);
-        $u_c1_id = $wpdb->insert_id;
-
-        $wpdb->insert($t_users, [
-            'full_name' => 'System Administrator',
-            'phone'     => '+251987005355',
-            'email'     => 'admin@smartdube.et',
-            'role'      => 'ADMIN',
-            'password_hash' => $pass_ad,
-            'fayda_id'  => 'FIN-0001-2024-AD'
-        ]);
-
-        // Insert Merchants
-        $wpdb->insert($t_merchants, [
-            'user_id' => $u_m1_id,
-            'store_name' => 'Arada Supermarket (Piazza)',
-            'business_license_no' => 'BL-ADD-2024-0091',
-            'address' => 'Piazza Church Street, Addis Ababa',
-            'kyc_status' => 'VERIFIED'
-        ]);
-        $m1_id = $wpdb->insert_id;
-
-        $wpdb->insert($t_merchants, [
-            'user_id' => $u_m2_id,
-            'store_name' => 'Zemero Supermarket (Bole)',
-            'business_license_no' => 'BL-ADD-2024-0182',
-            'address' => 'Bole Road, Near Friendship Mall, Addis Ababa',
-            'kyc_status' => 'VERIFIED'
-        ]);
-
-        // Insert Customer Profiles for Merchant 1
-        $wpdb->insert($t_customers, [
-            'merchant_id' => $m1_id,
-            'user_id' => $u_c1_id,
-            'full_name' => 'Dawit Yohannes',
-            'phone' => '+251933445566',
-            'fayda_id' => 'FIN-4455-2024-C1',
-            'credit_limit' => 5000.00,
-            'current_balance' => 1200.00,
-            'status' => 'ACTIVE'
-        ]);
-        $c1_profile_id = $wpdb->insert_id;
-
-        $wpdb->insert($t_customers, [
-            'merchant_id' => $m1_id,
-            'user_id' => null,
-            'full_name' => 'Bethlehem Tadesse',
-            'phone' => '+251912345678',
-            'fayda_id' => 'FIN-7788-2024-C2',
-            'credit_limit' => 4000.00,
-            'current_balance' => 450.00,
-            'status' => 'ACTIVE'
-        ]);
-
-        // Insert Demo Credit Transaction
-        $items = [
-            ['name' => 'Teff (25kg)', 'qty' => 1, 'price' => 1000.00],
-            ['name' => 'Cooking Oil (2L)', 'qty' => 1, 'price' => 200.00]
-        ];
-        $wpdb->insert($t_trans, [
-            'transaction_ref' => 'REF-' . time() . '-001',
-            'customer_id' => $c1_profile_id,
-            'merchant_id' => $m1_id,
-            'items_json' => json_encode($items),
-            'total_amount' => 1200.00,
-            'due_date' => date('Y-m-d', strtotime('+15 days')),
-            'status' => 'PENDING',
-            'notes' => 'Initial grocery credit purchase'
-        ]);
     }
-}
 }
