@@ -15,7 +15,7 @@ if (!defined('ABSPATH')) {
 }
 
 if (!defined('SMART_DUBE_VERSION')) {
-    define('SMART_DUBE_VERSION', '1.0.2.' . time());
+    define('SMART_DUBE_VERSION', '1.0.3.' . time());
 }
 if (!defined('SMART_DUBE_PLUGIN_DIR')) {
     define('SMART_DUBE_PLUGIN_DIR', plugin_dir_path(__FILE__));
