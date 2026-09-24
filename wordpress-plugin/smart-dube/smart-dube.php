@@ -1,6 +1,6 @@
 <?php
 /**
- * Plugin Name: Smart Dube BNPL System
+ * Plugin Name: Smart Dube - Ethiopian BNPL Digital Ledger
  * Plugin URI: https://github.com/tigistzn73/smart-dube
  * Description: Complete Buy-Now-Pay-Later (BNPL), neighborhood credit ledger, receipt OCR scanner, and SMS reminder system for Ethiopian merchants and customers.
  * Version: 1.0.3
@@ -59,8 +59,8 @@ if (class_exists('Smart_Dube_Admin')) {
     Smart_Dube_Admin::init();
 }
 
+// Main App Render Callback
 if (!function_exists('smart_dube_render_app_shortcode')) {
-    // Main App Render Callback
     function smart_dube_render_app_shortcode($atts = []) {
         $js_files = glob(SMART_DUBE_PLUGIN_DIR . 'assets/*.js');
         $css_files = glob(SMART_DUBE_PLUGIN_DIR . 'assets/*.css');
@@ -118,11 +118,10 @@ if (!function_exists('smart_dube_render_app_shortcode')) {
         $output .= '<div id="root" class="smart-dube-app-wrapper" style="min-height: 90vh; width: 100%;"></div>';
         return $output;
     }
+}
 
-    // Register all shortcode variations with brackets [smart_dube_app], [smart-dube-app], [smart_dube], [smart-dube], [smartdube]
-    add_shortcode('smart_dube_app', 'smart_dube_render_app_shortcode');
-    add_shortcode('smart-dube-app', 'smart_dube_render_app_shortcode');
-    add_shortcode('smart_dube', 'smart_dube_render_app_shortcode');
-    add_shortcode('smart-dube', 'smart_dube_render_app_shortcode');
-    add_shortcode('smartdube', 'smart_dube_render_app_shortcode');
+// Register all shortcode variations with brackets [smart_dube_app], [smart-dube-app], [smart_dube], [smart-dube], [smartdube]
+$shortcodes = ['smart_dube_app', 'smart-dube-app', 'smart_dube', 'smart-dube', 'smartdube'];
+foreach ($shortcodes as $sc) {
+    add_shortcode($sc, 'smart_dube_render_app_shortcode');
 }
