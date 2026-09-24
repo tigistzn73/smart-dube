@@ -1,9 +1,9 @@
 <?php
 /**
- * Plugin Name: Smart Dube (???? ??) - Ethiopian BNPL Digital Ledger
+ * Plugin Name: Smart Dube BNPL System
  * Plugin URI: https://github.com/tigistzn73/smart-dube
  * Description: Complete Buy-Now-Pay-Later (BNPL), neighborhood credit ledger, receipt OCR scanner, and SMS reminder system for Ethiopian merchants and customers.
- * Version: 1.0.0
+ * Version: 1.0.3
  * Author: Tigist Zinabu & Smart Dube Team
  * Author URI: https://github.com/tigistzn73
  * License: GPL-2.0+
