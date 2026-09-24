@@ -455,10 +455,13 @@ export const CustomerPortal = () => {
       .map(s => String(s.transaction_ref))
   );
 
+  const hasAnyActiveSchedule = allActiveSchedules.some(s => s.installments?.some(i => i.status !== 'PAID'));
+
   const unscheduledPendingTransactions = pendingTransactions.filter(tx => {
     if (scheduledTxIds.has(String(tx.id))) return false;
     if (scheduledTxRefs.has(String(tx.transaction_ref))) return false;
     if (scheduledMerchantIds.has(String(tx.merchant_id))) return false;
+    if (hasAnyActiveSchedule) return false;
     return true;
   });
 

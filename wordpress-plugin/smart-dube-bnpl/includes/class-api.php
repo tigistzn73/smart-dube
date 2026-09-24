@@ -1029,20 +1029,25 @@ class Smart_Dube_API {
             ARRAY_A
         );
 
-        // Auto-heal schedule merchant_id references if null or 0
-        $wpdb->query("UPDATE $table_schedules s JOIN $table_tx tx ON s.transaction_id = tx.id SET s.merchant_id = tx.merchant_id WHERE s.merchant_id IS NULL OR s.merchant_id = 0");
+        // Auto-heal schedule customer_id and merchant_id references if null or 0
+        if (!empty($profile_ids)) {
+            $first_pid = intval($profile_ids[0]);
+            $wpdb->query("UPDATE $table_schedules SET customer_id = $first_pid WHERE customer_id IS NULL OR customer_id = 0 OR customer_id = " . intval($user_id));
+        }
+        $wpdb->query("UPDATE $table_schedules s JOIN $table_tx tx ON s.transaction_id = tx.id SET s.merchant_id = tx.merchant_id, s.customer_id = tx.customer_id WHERE s.merchant_id IS NULL OR s.merchant_id = 0");
         $wpdb->query("UPDATE $table_schedules s JOIN $table_cp cp ON s.customer_id = cp.id SET s.merchant_id = cp.merchant_id WHERE s.merchant_id IS NULL OR s.merchant_id = 0");
 
         // Fetch active installment schedules for this customer
-        $schedules_rows = !empty($profile_ids) ? $wpdb->get_results(
+        $sched_where = !empty($profile_ids) ? "s.customer_id IN ($id_placeholders) OR s.customer_id = " . intval($user_id) : "s.customer_id = " . intval($user_id);
+        $schedules_rows = $wpdb->get_results(
             "SELECT s.*, COALESCE(m.store_name, 'Merchant Store') as store_name, tx.transaction_ref, tx.items_json 
              FROM $table_schedules s 
              LEFT JOIN $table_merchants m ON s.merchant_id = m.id 
              LEFT JOIN $table_tx tx ON s.transaction_id = tx.id 
-             WHERE s.customer_id IN ($id_placeholders) 
+             WHERE $sched_where 
              ORDER BY s.id DESC",
             ARRAY_A
-        ) : [];
+        );
 
         $active_schedules = [];
         if (!empty($schedules_rows)) {
@@ -1657,9 +1662,9 @@ class Smart_Dube_API {
         $table_cp = $wpdb->prefix . 'dube_customer_profiles';
         $table_tx = $wpdb->prefix . 'dube_credit_transactions';
 
-        $customer_id = intval($params['customerId'] ?? 0);
-        $merchant_id = intval($params['merchantId'] ?? 0);
-        $transaction_id = !empty($params['transactionId']) ? intval($params['transactionId']) : null;
+        $customer_id = intval($params['customerId'] ?? $params['customer_id'] ?? 0);
+        $merchant_id = intval($params['merchantId'] ?? $params['merchant_id'] ?? 0);
+        $transaction_id = !empty($params['transactionId']) ? intval($params['transactionId']) : (!empty($params['transaction_id']) ? intval($params['transaction_id']) : null);
         $installments = $params['installments'] ?? [];
 
         if (!$customer_id && $user_id) {
@@ -1677,6 +1682,16 @@ class Smart_Dube_API {
             }
         }
 
+        if (!$transaction_id && $customer_id) {
+            $tx_id = $wpdb->get_var($wpdb->prepare(
+                "SELECT id FROM $table_tx WHERE customer_id = %d AND status IN ('PENDING', 'PARTIALLY_PAID') ORDER BY created_at DESC LIMIT 1",
+                $customer_id
+            ));
+            if ($tx_id) {
+                $transaction_id = intval($tx_id);
+            }
+        }
+
         if (!$merchant_id && $transaction_id) {
             $merchant_id = intval($wpdb->get_var($wpdb->prepare("SELECT merchant_id FROM $table_tx WHERE id = %d", $transaction_id)));
         }
@@ -1690,7 +1705,8 @@ class Smart_Dube_API {
                 "DELETE FROM $table_schedules WHERE transaction_id = %d", 
                 $transaction_id
             ));
-        } elseif ($customer_id) {
+        }
+        if ($customer_id) {
             $wpdb->query($wpdb->prepare(
                 "DELETE FROM $table_schedules WHERE customer_id = %d AND (merchant_id = %d OR merchant_id IS NULL OR merchant_id = 0) AND (transaction_id IS NULL OR transaction_id = 0)", 
                 $customer_id, 
