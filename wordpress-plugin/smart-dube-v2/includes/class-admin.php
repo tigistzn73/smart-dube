@@ -40,7 +40,7 @@ class Smart_Dube_Admin {
         <div class="wrap" style="max-width: 900px;">
             <h1 style="display: flex; align-items: center; gap: 10px;">
                 <span style="background: linear-gradient(135deg, #009639, #FCDD09, #DA121A); color: #000; font-weight: 900; padding: 4px 10px; border-radius: 8px; font-size: 16px;">ET</span>
-                Smart Dube (???? ??)  Settings & Setup
+                Smart Dube (ስማርት ዱቤ) Settings & Setup
             </h1>
             <p>Ethiopian Digital BNPL Credit & Ledger System for WordPress.</p>
 

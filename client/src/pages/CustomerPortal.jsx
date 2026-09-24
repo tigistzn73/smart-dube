@@ -438,31 +438,21 @@ export const CustomerPortal = () => {
     console.log('[SmartDube] Active Schedules:', JSON.stringify(allActiveSchedules.map(s => ({ id: s.id, tx_id: s.transaction_id, merch_id: s.merchant_id, insts: s.installments?.map(i => i.status) }))));
   }
 
-  const scheduledMerchantIds = new Set(
-    allActiveSchedules
-      .filter(s => s.installments?.some(i => i.status !== 'PAID'))
-      .map(s => String(s.merchant_id || ''))
-      .filter(Boolean)
-  );
-  const scheduledTxIds = new Set(
-    allActiveSchedules
-      .filter(s => s.installments?.some(i => i.status !== 'PAID') && s.transaction_id)
-      .map(s => String(s.transaction_id))
-  );
-  const scheduledTxRefs = new Set(
-    allActiveSchedules
-      .filter(s => s.installments?.some(i => i.status !== 'PAID') && s.transaction_ref)
-      .map(s => String(s.transaction_ref))
-  );
-
-  const hasAnyActiveSchedule = allActiveSchedules.some(s => s.installments?.some(i => i.status !== 'PAID'));
-
   const unscheduledPendingTransactions = pendingTransactions.filter(tx => {
-    if (scheduledTxIds.has(String(tx.id))) return false;
-    if (scheduledTxRefs.has(String(tx.transaction_ref))) return false;
-    if (scheduledMerchantIds.has(String(tx.merchant_id))) return false;
-    if (hasAnyActiveSchedule) return false;
-    return true;
+    const isScheduled = allActiveSchedules.some(s => {
+      const hasUnpaid = s.installments?.some(i => i.status !== 'PAID');
+      if (!hasUnpaid) return false;
+
+      if (s.transaction_id && String(s.transaction_id) === String(tx.id)) return true;
+      if (s.transaction_ref && String(s.transaction_ref) === String(tx.transaction_ref)) return true;
+      if (s.merchant_id && String(s.merchant_id) === String(tx.merchant_id)) return true;
+      if (s.store_name && tx.store_name && s.store_name.trim().toLowerCase() === tx.store_name.trim().toLowerCase()) return true;
+      if (s.customer_id && String(s.customer_id) === String(tx.customer_id)) return true;
+
+      return false;
+    });
+
+    return !isScheduled;
   });
 
   const chartWidth = 500;
